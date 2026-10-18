@@ -1,0 +1,21 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "OmenHubLighterPlus (Debug x64)",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "build",
+            "program": "${workspaceFolder}/OmenHubLighterPlus/bin/x64/Debug/net6.0-windows/OmenHubLighterPlus.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}/OmenHubLighterPlus",
+            "console": "internalConsole",
+            "stopAtEntry": false
+        },
+        {
+            "name": "Attach to Process",
+            "type": "coreclr",
+            "request": "attach"
+        }
+    ]
+}

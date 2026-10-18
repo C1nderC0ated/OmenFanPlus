@@ -72,8 +72,11 @@ if (-not (Test-Path -LiteralPath $builtExe)) { throw "The build did not produce 
 
 Write-Host "[2/6] Closing running copies of the app..."
 # "--quit" asks a running OmenFanPlus to exit the normal way, so it hands the fans back to the BIOS first.
+$quitAsked = $false
 if (Get-Process -Name $appName -ErrorAction SilentlyContinue) {
+    Write-Host "      asking the running OmenFanPlus to quit"
     Start-Process -FilePath $builtExe -ArgumentList '--quit' -Wait
+    $quitAsked = $true
 }
 $running = @(Get-Process -Name $appName -ErrorAction SilentlyContinue)
 foreach ($p in $running) { [void]$p.WaitForExit(15000) }
@@ -88,7 +91,11 @@ foreach ($p in $leftover) {
     Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
 }
 foreach ($p in $leftover) { [void]$p.WaitForExit(10000) }
-if ($running.Count -eq 0 -and $leftover.Count -eq 0) { Write-Host "      none running" }
+if ($quitAsked -and $leftover.Count -eq 0) {
+    Write-Host "      it closed"
+} elseif (-not $quitAsked -and $leftover.Count -eq 0) {
+    Write-Host "      none running"
+}
 
 Write-Host "[3/6] Checking for the old WinRing0 driver..."
 # OmenHubLighterPlus builds before 2.0 loaded the vulnerable WinRing0 driver from their own folder, as

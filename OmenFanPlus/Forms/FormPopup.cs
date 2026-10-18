@@ -23,6 +23,7 @@ namespace OmenFanPlus.Forms
         private int _refreshBusy;
         private int _curveBusy;
         private readonly ToolTip _temperatureToolTip = new();
+        private readonly ToolTip _modeToolTip = new() { AutoPopDelay = 15000 };
 
         internal FormPopup(FanModeController fanModes)
         {
@@ -83,12 +84,15 @@ namespace OmenFanPlus.Forms
 
         /// <summary>
         /// Only show the modes this laptop's BIOS supports. Boards without manual fan control (e.g. the
-        /// OMEN 15-dc1xxx) get Default / Performance / Cool, and the Off / Max / Custom row is hidden.
+        /// OMEN 15-dc1xxx) get Default / Performance / Comfort, and the Off / Max / Custom row is hidden.
         /// </summary>
         private void ApplyCapabilities()
         {
             var caps = _fanModes.Capabilities;
             QuietButton.Text = FanModeController.DisplayName(caps.QuietOrCoolMode);
+            // Until the probe is complete it isn't known whether this board takes Cool (2) or Quiet (3).
+            QuietButton.Enabled = caps.ProbeComplete;
+            SetModeToolTips(caps.QuietOrCoolMode);
 
             // Remember what was applied: a child's Visible reads false while the popup itself is hidden.
             var manual = caps.ManualFanControlSupported;
@@ -104,6 +108,23 @@ namespace OmenFanPlus.Forms
             OffButton.Visible = MaxButton.Visible = CustomButton.Visible = CustomCogButton.Visible = manual;
             ClientSize = new Size(ClientSize.Width, (manual ? OffButton.Bottom : DefaultButton.Bottom) + _bottomMargin);
             ResumeLayout();
+        }
+
+        private void SetModeToolTips(PerformanceMode thirdMode)
+        {
+            // On the 2018-2019 OMENs HP showed its Cool profile as "Comfort": a lower-temperature mode that runs
+            // the fans sooner, not a quiet one. Quiet (3) only exists on newer (Victus-style) boards.
+            _modeToolTip.SetToolTip(QuietButton, thirdMode == PerformanceMode.Cool
+                ? "Comfort (HP's Cool profile): lower CPU and GPU temperatures.\n" +
+                  "The fans start earlier and run more; for the quietest fans, use Default."
+                : "Quiet: HP's low-noise mode.");
+            _modeToolTip.SetToolTip(DefaultButton, "Default: HP's balanced mode.");
+            _modeToolTip.SetToolTip(PerformanceButton,
+                "Performance: higher CPU and GPU power limits; the fans ramp up more under load.\n" +
+                "The BIOS may refuse it on battery; it is sent again when the charger is plugged in.");
+            _modeToolTip.SetToolTip(MaxButton, "Max: fans at full speed (re-sent every 90 seconds).");
+            _modeToolTip.SetToolTip(OffButton, "Off: fans stopped until the BIOS takes over again (about 2 minutes).");
+            _modeToolTip.SetToolTip(CustomButton, "Custom: your fan curve (edit it with the gear button).");
         }
 
         private void ShowSavedMode()

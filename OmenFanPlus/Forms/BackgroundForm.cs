@@ -22,6 +22,7 @@ namespace OmenFanPlus.Forms
             popup = new FormPopup(fanModes);
             Visible = false;
             AddMenuItems();
+            DarkMenuRenderer.Apply(contextMenuStrip1);
 
             _updates.UpdateAvailable += (sender, message) =>
             {

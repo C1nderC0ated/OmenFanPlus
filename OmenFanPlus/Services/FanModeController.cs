@@ -260,7 +260,8 @@ namespace OmenFanPlus.Services
         {
             PerformanceMode.Default => "Default",
             PerformanceMode.Performance => "Performance",
-            PerformanceMode.Cool => "Cool",
+            // HP's firmware calls it Cool; OMEN Command Center showed it as "Comfort" on these laptops.
+            PerformanceMode.Cool => "Comfort",
             PerformanceMode.Quiet => "Quiet",
             _ => mode.ToString(),
         };
@@ -408,7 +409,7 @@ namespace OmenFanPlus.Services
             Status = rc switch
             {
                 0 when releaseRc != 0 => $"{what} applied, but fans not released (code {releaseRc})",
-                0 => $"{what} applied {DateTime.Now:HH:mm}",
+                0 => $"{what}, applied {DateTime.Now:HH:mm}",
                 NotSupported => $"{what} isn't supported on this laptop",
                 > 0 => $"{what} rejected by BIOS (code {rc})",
                 _ => $"{what} not applied (BIOS not reachable)",

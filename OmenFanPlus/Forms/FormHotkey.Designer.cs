@@ -52,9 +52,9 @@
             // 
             this.keyListCombobox.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
             | System.Windows.Forms.AnchorStyles.Right)));
-            this.keyListCombobox.BackColor = System.Drawing.SystemColors.ButtonFace;
+            this.keyListCombobox.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(64)))), ((int)(((byte)(64)))), ((int)(((byte)(64)))));
             this.keyListCombobox.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
-            this.keyListCombobox.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(31)))), ((int)(((byte)(31)))), ((int)(((byte)(31)))));
+            this.keyListCombobox.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(230)))), ((int)(((byte)(230)))), ((int)(((byte)(230)))));
             this.keyListCombobox.FormattingEnabled = true;
             this.keyListCombobox.Location = new System.Drawing.Point(12, 72);
             this.keyListCombobox.Name = "keyListCombobox";

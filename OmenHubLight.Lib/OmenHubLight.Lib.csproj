@@ -1,11 +1,17 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net5.0</TargetFramework>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <!-- LibreHardwareMonitorLib only ships runtime-specific (runtimes/win-*) assemblies. -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PlatformTarget>x64</PlatformTarget>
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\OpenHardwareMonitor\OpenHardwareMonitorLib.csproj" />
+    <!-- Replaces the bundled 2020 OpenHardwareMonitor fork, which installed the vulnerable WinRing0 driver.
+         0.9.5 and later use the signed PawnIO driver instead (when it is installed). MPL-2.0. -->
+    <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6" />
+    <PackageReference Include="System.Management" Version="10.0.13" />
   </ItemGroup>
 
 </Project>

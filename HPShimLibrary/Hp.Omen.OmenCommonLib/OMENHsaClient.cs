@@ -12,24 +12,49 @@ namespace Hp.Omen.OmenCommonLib
 {
     public class OmenHsaClient
     {
+        private static readonly object SystemDesignDataLock = new();
         private static byte[] _systemDesignData;
+        private static bool _systemDesignDataUnsupported;
 
         public byte[] SystemDesignData
         {
             get
             {
-                if (_systemDesignData == null)
+                lock (SystemDesignDataLock)
                 {
-                    _systemDesignData = (byte[])CurrentApp.Properties["SystemDesignData"];
-                    if (_systemDesignData == null)
+                    if (_systemDesignData == null && !_systemDesignDataUnsupported)
                     {
-                        var inputData = new byte[4];
-                        _systemDesignData = BiosWmiCmd_Get(131080, 40, inputData, 128);
-                        if (_systemDesignData != null) CurrentApp.Properties["SystemDesignData"] = _systemDesignData;
+                        _systemDesignData = (byte[])CurrentApp.Properties["SystemDesignData"];
+                        if (_systemDesignData == null)
+                        {
+                            var rc = TryBiosWmiCmd_Get(131080, 40, new byte[4], 128, out var data);
+                            SeedSystemDesignData(rc, data);
+                        }
                     }
-                }
 
-                return _systemDesignData;
+                    return _systemDesignData;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Stores an answer to 0x28 GetSystemDesignData. Older boards (e.g. the 2019 OMEN 15-dc1xxx, 8574) say
+        /// "command not available"; that is remembered so the BIOS isn't asked on every mode change. A WMI failure
+        /// (-1) or a bad-signature answer (2) is not remembered, so the next call asks again.
+        /// </summary>
+        public void SeedSystemDesignData(int returnCode, byte[] data)
+        {
+            lock (SystemDesignDataLock)
+            {
+                if (returnCode == 0 && data != null)
+                {
+                    _systemDesignData = data;
+                    CurrentApp.Properties["SystemDesignData"] = data;
+                }
+                else if (returnCode > 0 && returnCode != 2)
+                {
+                    _systemDesignDataUnsupported = true;
+                }
             }
         }
 
@@ -59,21 +84,53 @@ namespace Hp.Omen.OmenCommonLib
             return null;
         }
 
+        /// <summary>
+        /// Like <see cref="BiosWmiCmd_Get(uint, uint, byte[], uint)"/>, but reports why a command failed.
+        /// Returns 0 on success, the BIOS rwReturnCode if the BIOS rejected the command, or -1 if WMI itself failed.
+        /// </summary>
+        public int TryBiosWmiCmd_Get(uint command, uint commandType, byte[] inputData, uint returnDataSize, out byte[] data)
+        {
+            data = null;
+            try
+            {
+                data = HpBiosIntHelper.InvokeBiosCommand(command, commandType, returnDataSize, inputData).Data;
+                return 0;
+            }
+            catch (HpBiosException ex)
+            {
+                OutputLogError($"command 0x{command:X} type 0x{commandType:X2}: {ex.Message}");
+                return (int)ex.ReturnCode;
+            }
+            catch (Exception ex)
+            {
+                OutputLogError($"command 0x{command:X} type 0x{commandType:X2}: {ex.Message}");
+                return -1;
+            }
+        }
+
         public int BiosWmiCmd_Set(uint commandType, byte[] inputData)
         {
             return BiosWmiCmd_Set(131081, commandType, inputData);
         }
 
+        /// <summary>
+        /// Returns 0 on success, the BIOS rwReturnCode if the BIOS rejected the command, or -1 if WMI itself failed.
+        /// </summary>
         public int BiosWmiCmd_Set(uint command, uint commandType, byte[] inputData)
         {
             try
             {
-                var result = HpBiosIntHelper.InvokeBiosCommand(command, commandType, 4, inputData);
-                return result.Data[0];
+                HpBiosIntHelper.InvokeBiosCommand(command, commandType, 4, inputData);
+                return 0;
+            }
+            catch (HpBiosException ex)
+            {
+                OutputLogError($"command 0x{command:X} type 0x{commandType:X2}: {ex.Message}");
+                return (int)ex.ReturnCode;
             }
             catch (Exception ex)
             {
-                OutputLogError(ex.Message);
+                OutputLogError($"command 0x{command:X} type 0x{commandType:X2}: {ex.Message}");
             }
 
             return -1;
@@ -137,17 +194,31 @@ namespace Hp.Omen.OmenCommonLib
             return thermalPolicyVersion;
         }
 
+        /// <summary>
+        /// Speed of one fan (index 0 or 1) in RPM via the read-only 0x11 query, or -1 if the BIOS can't report it.
+        /// This is the query the Linux hp-wmi driver uses for fan speed; it works on boards without 0x2D
+        /// (e.g. the OMEN 15-dc1xxx, 8574). The speed is big-endian in bytes 2-3 of the answer.
+        /// </summary>
+        public int GetFanRpm(int fanIndex)
+        {
+            var rc = TryBiosWmiCmd_Get(131080, 0x11, new[] { (byte)fanIndex }, 128, out var data);
+            if (rc != 0 || data == null || data.Length < 4)
+                return -1;
+            return (data[2] << 8) | data[3];
+        }
+
+        /// <summary>
+        /// Current level of each fan (CPU, GPU) in units of 100 RPM. Empty if the BIOS doesn't support 0x2D.
+        /// </summary>
         public List<byte> GetFanLevel()
         {
             var data = new List<byte>();
             var result = BiosWmiCmd_Get(131080, 45, new byte[4], 128);
-            if (result != null && result.Length != 0)
+            if (result != null && result.Length >= 2)
             {
-                foreach (var b in result)
-                {
-                    if (b == 0) break;
-                    data.Add(b);
-                }
+                // Read by position: a stopped fan reports 0, which must not hide the fans after it.
+                data.Add(result[0]);
+                data.Add(result[1]);
             }
 
             return data;

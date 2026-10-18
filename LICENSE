@@ -18,7 +18,8 @@ This software includes third party open source software components:
 
 --------
 
-Open Hardware Monitor
+LibreHardwareMonitorLib (used unmodified through NuGet; it replaces the Open Hardware Monitor code that earlier
+versions included. See THIRD-PARTY-NOTICES.md for the other components.)
 
 Mozilla Public License 2.0
 

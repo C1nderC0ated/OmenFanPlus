@@ -7,7 +7,7 @@
             "type": "process",
             "args": [
                 "build",
-                "${workspaceFolder}/OmenHubLighterPlus/OmenHubLighterPlus.csproj",
+                "${workspaceFolder}/OmenFanPlus/OmenFanPlus.csproj",
                 "--configuration",
                 "Debug",
                 "/property:Platform=x64",
@@ -26,7 +26,7 @@
             "type": "process",
             "args": [
                 "publish",
-                "${workspaceFolder}/OmenHubLighterPlus/OmenHubLighterPlus.csproj",
+                "${workspaceFolder}/OmenFanPlus/OmenFanPlus.csproj",
                 "--configuration",
                 "Release",
                 "/property:Platform=x64",
@@ -44,7 +44,7 @@
             "type": "process",
             "args": [
                 "restore",
-                "${workspaceFolder}/OmenHubLight.sln"
+                "${workspaceFolder}/OmenFanPlus.sln"
             ],
             "problemMatcher": "$msCompile",
             "group": "build"

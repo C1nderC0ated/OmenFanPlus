@@ -2,13 +2,13 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "OmenHubLighterPlus (Debug x64)",
+            "name": "OmenFanPlus (Debug x64)",
             "type": "coreclr",
             "request": "launch",
             "preLaunchTask": "build",
-            "program": "${workspaceFolder}/OmenHubLighterPlus/bin/x64/Debug/net6.0-windows/OmenHubLighterPlus.exe",
+            "program": "${workspaceFolder}/OmenFanPlus/bin/x64/Debug/net10.0-windows/win-x64/OmenFanPlus.exe",
             "args": [],
-            "cwd": "${workspaceFolder}/OmenHubLighterPlus",
+            "cwd": "${workspaceFolder}/OmenFanPlus",
             "console": "internalConsole",
             "stopAtEntry": false
         },

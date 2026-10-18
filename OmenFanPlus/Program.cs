@@ -1,6 +1,7 @@
-﻿using Hp.Ohl.WmiService;
+﻿using System.Configuration;
+using Hp.Ohl.WmiService;
 using Hp.Omen.OmenCommonLib.PowerControl.Enum;
-using OmenHubLight.Lib;
+using OmenFanPlus.Lib;
 using OmenFanPlus.Forms;
 using OmenFanPlus.Properties;
 using OmenFanPlus.Services;
@@ -37,17 +38,28 @@ namespace OmenFanPlus
             AppDomain.CurrentDomain.UnhandledException += (sender, e) =>
                 AppLog.Error("Unhandled exception", e.ExceptionObject as Exception);
 
-            if (Settings.Default.FirstStart == true)
+            RecoverFromCorruptSettings();
+            try
             {
-                if (!SettingsMigration.TryImportFromOtherCopy())
+                if (Settings.Default.FirstStart == true)
                 {
-                    Settings.Default.PerformanceMode = PerformanceMode.Default;
-                    Settings.Default.AlternateKey = Keys.None;
-                    Settings.Default.ExecuteArguments = "";
-                    Settings.Default.ExecutePath = "";
+                    if (!SettingsMigration.TryImportFromOtherCopy())
+                    {
+                        Settings.Default.PerformanceMode = PerformanceMode.Default;
+                        Settings.Default.AlternateKey = Keys.None;
+                        Settings.Default.ExecuteArguments = "";
+                        Settings.Default.ExecutePath = "";
+                    }
+                    Settings.Default.FirstStart = false;
+                    FanModeController.TrySave();
                 }
-                Settings.Default.FirstStart = false;
-                Settings.Default.Save();
+            }
+            catch (Exception ex)
+            {
+                AppLog.Error("The settings can't be read; the app can't start", ex);
+                MessageBox.Show($"OmenFanPlus can't read its settings: {ex.Message}", "OmenFanPlus",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return 2;
             }
 
             try
@@ -65,7 +77,15 @@ namespace OmenFanPlus
                         $"GPU {temperatures.Gpu?.ToString("0") ?? "n/a"} C");
 
             _fanModes = new FanModeController();
-            _fanModes.Initialize();
+            try
+            {
+                _fanModes.Initialize();
+            }
+            catch (Exception ex)
+            {
+                // The tray icon must come up even if the first probe blew up; the probe retries on its own.
+                AppLog.Error("The first BIOS probe failed", ex);
+            }
 
             // Also removes the task of the pre-rename version (OmenHubLighterPlusStartup).
             StartupTask.EnsureUpToDate(Settings.Default.RunAtStartup);
@@ -111,6 +131,37 @@ namespace OmenFanPlus
         public static void Quit()
         {
             Application.Exit();
+        }
+
+        /// <summary>
+        /// A user.config left empty or truncated (power cut during a save) makes every later settings read throw
+        /// for the life of the process. Checking it this way first doesn't poison the settings system, so the
+        /// bad file can be moved aside and the app continues with defaults (and the import from an older copy).
+        /// </summary>
+        private static void RecoverFromCorruptSettings()
+        {
+            try
+            {
+                ConfigurationManager.OpenExeConfiguration(ConfigurationUserLevel.PerUserRoamingAndLocal);
+            }
+            catch (ConfigurationErrorsException ex)
+            {
+                var file = ex.Filename ?? (ex.InnerException as ConfigurationErrorsException)?.Filename;
+                AppLog.Error($"The settings file is unreadable ({file ?? "unknown file"})", ex);
+                // Only ever touch a user.config; the shipped OmenFanPlus.dll.config next to the exe stays.
+                if (file != null && file.EndsWith("user.config", StringComparison.OrdinalIgnoreCase) && File.Exists(file))
+                {
+                    try
+                    {
+                        File.Move(file, file + ".corrupt", overwrite: true);
+                        AppLog.Warn($"Moved it to {file}.corrupt and continuing with default settings");
+                    }
+                    catch (Exception moveEx)
+                    {
+                        AppLog.Error("Couldn't move the unreadable settings file aside", moveEx);
+                    }
+                }
+            }
         }
 
         private static bool AskRunningCopyToQuit()

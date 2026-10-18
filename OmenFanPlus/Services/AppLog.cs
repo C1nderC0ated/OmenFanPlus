@@ -20,7 +20,10 @@ namespace OmenFanPlus.Services
         public static void Start()
         {
             _listener ??= new OmenEventSourceListener();
-            Info($"Started {Application.ProductName} {Application.ProductVersion} from {Application.ExecutablePath}");
+            // The build time tells builds of the same version apart.
+            var built = "unknown build time";
+            try { built = $"built {File.GetLastWriteTime(Application.ExecutablePath):yyyy-MM-dd HH:mm}"; } catch { }
+            Info($"Started {Application.ProductName} {Application.ProductVersion} ({built}) from {Application.ExecutablePath}");
         }
 
         public static void Info(string message) => Write("INFO", message);

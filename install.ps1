@@ -26,6 +26,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $warnings = 0
+
+# From 32-bit PowerShell, $env:ProgramFiles is "Program Files (x86)", which the x64 app doesn't treat as installed.
+if (-not [Environment]::Is64BitProcess) { throw "Run install.ps1 from 64-bit PowerShell." }
 $appName = 'OmenFanPlus'
 $legacyName = 'OmenHubLighterPlus'
 $exeName = "$appName.exe"
@@ -37,6 +40,8 @@ $staging = Join-Path $PSScriptRoot 'artifacts\publish'
 
 # robocopy /MIR deletes everything else in the target folder, so only accept a folder that is clearly ours:
 # named after the app, and either new, empty, or already holding the app.
+# A relative path is taken from the PowerShell location (GetFullPath alone would use the process directory).
+$InstallDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($InstallDir)
 $InstallDir = [IO.Path]::GetFullPath($InstallDir).TrimEnd([IO.Path]::DirectorySeparatorChar)
 if ((Split-Path -Leaf $InstallDir) -ne $appName) {
     throw "InstallDir must be a folder named '$appName' (got '$InstallDir')."
@@ -159,7 +164,12 @@ if (($task -or $legacyTask) -and -not $inProgramFiles) {
             $warnings++
         }
     }
-    Write-Host "      not creating $taskName for a copy outside Program Files; autostart is off"
+    if ($task) {
+        $keeps = ([string]@($task.Actions)[0].Execute).Trim('"')
+        Write-Host "      $taskName was not changed: it still starts $keeps"
+    } else {
+        Write-Host "      not creating $taskName for a copy outside Program Files; autostart is off"
+    }
 } elseif ($task -or $legacyTask) {
     $oldExe = $null
     if ($legacyTask) { $oldExe = ([string]@($legacyTask.Actions)[0].Execute).Trim('"') }
@@ -197,8 +207,10 @@ if (($task -or $legacyTask) -and -not $inProgramFiles) {
     if ($oldExe -and (Test-Path -LiteralPath $oldExe)) {
         Write-Host "      note: the old build at $oldExe still exists. Don't start it: it loads WinRing0 again."
     }
-} else {
+} elseif ($inProgramFiles) {
     Write-Host "      no startup task yet (tick 'Run on startup' in the tray menu to create one)"
+} else {
+    Write-Host "      no startup task; autostart needs the Program Files install"
 }
 
 if ($NoStart) {

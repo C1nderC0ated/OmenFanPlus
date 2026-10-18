@@ -1,6 +1,7 @@
 using Hp.Omen.OmenCommonLib;
 using Hp.Omen.OmenCommonLib.PowerControl.Enum;
 using Microsoft.Win32;
+using OmenFanPlus.Models;
 using OmenFanPlus.Properties;
 
 namespace OmenFanPlus.Services
@@ -12,10 +13,10 @@ namespace OmenFanPlus.Services
     internal sealed class FanModeController : IDisposable
     {
         /// <summary>Returned by the Apply/Set methods when the laptop doesn't support the request.</summary>
-        public const int NotSupported = -2;
+        public const int NotSupported = OmenHsaClient.UnsupportedReturnCode;
 
         private static readonly TimeSpan LockTimeout = TimeSpan.FromSeconds(20);
-        private static readonly TimeSpan[] ProbeRetryDelays =
+        private static readonly TimeSpan[] RetryDelays =
             { TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(30),
               TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(120), TimeSpan.FromSeconds(300) };
 
@@ -29,11 +30,13 @@ namespace OmenFanPlus.Services
         private CancellationTokenSource? _pendingReapply;
         private PowerLineStatus _lastPowerLine = SystemInformation.PowerStatus.PowerLineStatus;
         private int _probeRetry;
+        private int _applyRetry;
         private volatile bool _shuttingDown;
 
         // Set only while the custom curve owns the fans, so a curve update that was already running when the
         // user picked another mode can't overwrite it.
         private bool _customActive;
+        private int? _lastCurveRc;
 
         public FanModeController()
         {
@@ -42,8 +45,11 @@ namespace OmenFanPlus.Services
 
         public OmenCapabilities Capabilities { get; private set; } = null!;
 
-        /// <summary>Short text describing the last mode change, e.g. "Performance applied 14:32".</summary>
+        /// <summary>Short text describing the last mode change, e.g. "Performance, applied 14:32".</summary>
         public string Status { get; private set; } = "";
+
+        /// <summary>Whether the last mode change was accepted by the BIOS.</summary>
+        public bool LastResultOk { get; private set; } = true;
 
         /// <summary>Raised (on any thread) when <see cref="Status"/> or <see cref="Capabilities"/> change.</summary>
         public event EventHandler? StatusChanged;
@@ -54,20 +60,28 @@ namespace OmenFanPlus.Services
             SystemEvents.PowerModeChanged += SystemEvents_PowerModeChanged;
         }
 
+        /// <summary>Asks for a new probe soon, e.g. when the popup opens while the BIOS hasn't answered yet.</summary>
+        public void RequestProbe(string reason)
+        {
+            if (Capabilities?.ProbeComplete != true && _pendingReapply is null or { IsCancellationRequested: true })
+                ScheduleReapply(reason, TimeSpan.FromMilliseconds(100), isProbeRetry: true);
+        }
+
         /// <summary>
         /// Asks the BIOS what it supports and re-applies the saved mode. Settings are only migrated and modes
-        /// only re-applied once every probe has a definite answer; until then it retries with a back-off.
+        /// only re-applied once every probe has a definite answer; until then it retries with a back-off that
+        /// settles at every 5 minutes.
         /// </summary>
         private void ProbeAndApply(string reason)
         {
             if (_shuttingDown)
                 return;
 
-            bool complete;
+            var complete = false;
+            var applyRc = 0;
             if (!Monitor.TryEnter(_applyLock, LockTimeout))
             {
                 AppLog.Warn($"Skipped probing the BIOS ({reason}): another BIOS call is still running");
-                complete = false;
             }
             else
             {
@@ -84,12 +98,17 @@ namespace OmenFanPlus.Services
                     {
                         _probeRetry = 0;
                         MigrateUnsupportedSettings();
-                        ApplySavedModeLocked(reason);
+                        applyRc = ApplySavedModeLocked(reason);
                     }
                     else
                     {
                         Report("Saved mode", -1);
                     }
+                }
+                catch (Exception ex)
+                {
+                    AppLog.Error($"Probing the BIOS failed ({reason})", ex);
+                    Capabilities ??= OmenCapabilities.Unavailable();
                 }
                 finally
                 {
@@ -97,11 +116,30 @@ namespace OmenFanPlus.Services
                 }
             }
 
-            if (!complete && _probeRetry < ProbeRetryDelays.Length)
+            if (!complete)
             {
                 // The HP WMI provider can be late right after logon.
-                ScheduleReapply("BIOS retry", ProbeRetryDelays[_probeRetry++], isProbeRetry: true);
+                var delay = RetryDelays[Math.Min(_probeRetry++, RetryDelays.Length - 1)];
+                ScheduleReapply("BIOS retry", delay, isProbeRetry: true);
             }
+            else
+            {
+                RetryIfTransient(applyRc, reason);
+            }
+        }
+
+        // A WMI hiccup (rc -1) or a bad-signature answer (rc 2) is worth another try; a BIOS rejection isn't.
+        private void RetryIfTransient(int rc, string reason)
+        {
+            if (rc is >= 0 and not 2 || _applyRetry >= 3)
+            {
+                if (rc is >= 0 and not 2) _applyRetry = 0;
+                return;
+            }
+
+            var delay = RetryDelays[_applyRetry++];
+            AppLog.Info($"Will try to apply the saved mode again in {delay.TotalSeconds:0} s ({reason})");
+            ScheduleReapply($"{reason}, retry {_applyRetry}", delay, isApplyRetry: true);
         }
 
         /// <summary>Saved modes that this BIOS can't do are mapped to the closest mode it can.</summary>
@@ -121,19 +159,15 @@ namespace OmenFanPlus.Services
                 changed = true;
             }
 
-            if (Capabilities.UsesLegacyCoolMode && s.PerformanceMode == PerformanceMode.Quiet)
+            var third = Capabilities.QuietOrCoolMode;
+            if (s.PerformanceMode is PerformanceMode.Quiet or PerformanceMode.Cool && s.PerformanceMode != third)
             {
-                s.PerformanceMode = PerformanceMode.Cool;
-                changed = true;
-            }
-            else if (!Capabilities.UsesLegacyCoolMode && s.PerformanceMode == PerformanceMode.Cool)
-            {
-                s.PerformanceMode = PerformanceMode.Quiet;
+                s.PerformanceMode = third;
                 changed = true;
             }
 
             if (changed)
-                s.Save();
+                TrySave();
         }
 
         public bool ApplyThermalMode(PerformanceMode mode) =>
@@ -143,7 +177,10 @@ namespace OmenFanPlus.Services
                 _customActive = false;
                 var releaseRc = ReleaseManualFanControl();
                 var rc = _client.SetFanMode(mode);
-                SaveMode(mode);
+                // A rejected mode isn't remembered (it would be re-sent at every start); Performance is the
+                // exception, because the EC refuses it on battery and it is sent again on AC.
+                if (rc is 0 or < 0 || mode == PerformanceMode.Performance)
+                    SaveMode(mode);
                 return Report(DisplayName(mode), rc, releaseRc);
             });
 
@@ -154,12 +191,12 @@ namespace OmenFanPlus.Services
                     return Report("Max", NotSupported);
 
                 _customActive = false;
-                _client.SetFanMode(PerformanceMode.Performance);
+                var modeRc = _client.SetFanMode(PerformanceMode.Performance);
                 var rc = _client.SetSwFanControlLevel(100, 100);
                 SaveMode(max: true);
-                if (rc == 0)
-                    _maxKeepAlive.Change(MaxKeepAliveInterval, MaxKeepAliveInterval);
-                return Report("Max", rc);
+                // Even a failed first send is retried by the keep-alive.
+                _maxKeepAlive.Change(MaxKeepAliveInterval, MaxKeepAliveInterval);
+                return Report("Max", rc == 0 ? modeRc : rc);
             });
 
         public bool ApplyOff() =>
@@ -170,13 +207,16 @@ namespace OmenFanPlus.Services
 
                 StopMaxKeepAlive();
                 _customActive = false;
-                _client.SetMaxFan(MaxFanMode.Off);
-                var rc = _client.SetSwFanControlLevel(1, 1);
+                // Keep the saved thermal profile (Max may have left Performance in the BIOS).
+                _client.SetFanMode(Settings.Default.PerformanceMode);
+                if (Capabilities.MaxFanSupported)
+                    _client.SetMaxFan(MaxFanMode.Off);
+                var rc = _client.SetSwFanControlLevel(FanCurveProfile.StoppedLevel, FanCurveProfile.StoppedLevel);
                 SaveMode(off: true);
                 return Report("Off", rc);
             });
 
-        /// <summary>Hands the fans to the custom curve; the curve timer then calls <see cref="SetFanLevels"/>.</summary>
+        /// <summary>Hands the fans to the custom curve; the curve timer then calls <see cref="SetFanLevelsPercent"/>.</summary>
         public bool ApplyCustom() =>
             Locked("Custom curve", () =>
             {
@@ -184,14 +224,23 @@ namespace OmenFanPlus.Services
                     return Report("Custom curve", NotSupported);
 
                 StopMaxKeepAlive();
-                var rc = _client.SetMaxFan(MaxFanMode.Off);
+                _client.SetFanMode(Settings.Default.PerformanceMode);
+                if (Capabilities.MaxFanSupported)
+                    _client.SetMaxFan(MaxFanMode.Off);
                 _customActive = true;
+                _lastCurveRc = null;
                 SaveMode(custom: true);
+                // Full speed until the curve's first reading arrives (within 2 s); this also tells whether
+                // the board accepts fan levels at all.
+                var rc = _client.SetSwFanControlLevel(Capabilities.FanLevelMax, Capabilities.FanLevelMax);
                 return Report("Custom curve", rc);
             });
 
-        /// <summary>Sets the fan levels for the custom curve. Ignored unless Custom is the active mode.</summary>
-        public int SetFanLevels(int cpuLevel, int gpuLevel)
+        /// <summary>
+        /// Sets the fans for the custom curve, in curve percent (0 = stopped, 1-100 = slowest to fastest).
+        /// Ignored unless Custom is the active mode.
+        /// </summary>
+        public int SetFanLevelsPercent(int cpuPercent, int gpuPercent)
         {
             if (!Monitor.TryEnter(_applyLock, LockTimeout))
                 return -1;
@@ -199,7 +248,16 @@ namespace OmenFanPlus.Services
             {
                 if (_shuttingDown || !_customActive || !Capabilities.ManualFanControlSupported)
                     return NotSupported;
-                return _client.SetSwFanControlLevel(Math.Clamp(cpuLevel, 0, 255), Math.Clamp(gpuLevel, 0, 255));
+
+                var cpu = FanCurveProfile.LevelFromPercent(cpuPercent, Capabilities.FanLevelMin, Capabilities.FanLevelMax);
+                var gpu = FanCurveProfile.LevelFromPercent(gpuPercent, Capabilities.FanLevelMin, Capabilities.FanLevelMax);
+                var rc = _client.SetSwFanControlLevel(cpu, gpu);
+
+                // Report only when the result flips, so a 2 s timer can't flood the log or the status line.
+                if (_lastCurveRc == null || (_lastCurveRc == 0) != (rc == 0))
+                    Report("Custom curve", rc);
+                _lastCurveRc = rc;
+                return rc;
             }
             finally
             {
@@ -210,6 +268,11 @@ namespace OmenFanPlus.Services
         /// <summary>Fan levels in units of 100 RPM, or an empty list if the BIOS can't report them.</summary>
         public List<int> GetFanLevels() =>
             Capabilities.FanLevelSupported ? _client.GetFanLevel().ConvertAll(b => (int)b) : new List<int>();
+
+        /// <summary>The current fan levels expressed on the curve's percent scale.</summary>
+        public List<int> GetFanLevelsPercent() =>
+            GetFanLevels().ConvertAll(level =>
+                FanCurveProfile.PercentFromLevel(level, Capabilities.FanLevelMin, Capabilities.FanLevelMax));
 
         /// <summary>
         /// Fan speeds in RPM: from the 0x2D fan levels where the board has them, otherwise from the 0x11 query
@@ -266,13 +329,19 @@ namespace OmenFanPlus.Services
             _ => mode.ToString(),
         };
 
-        public void ApplySavedMode(string reason) => Locked("Saved mode", () =>
+        public void ApplySavedMode(string reason)
         {
-            ApplySavedModeLocked(reason);
-            return true;
-        });
+            var rc = NotSupported;
+            Locked("Saved mode", () =>
+            {
+                rc = ApplySavedModeLocked(reason);
+                return true;
+            });
+            RetryIfTransient(rc, reason);
+        }
 
-        private void ApplySavedModeLocked(string reason)
+        // Returns the BIOS return code of the mode that was sent.
+        private int ApplySavedModeLocked(string reason)
         {
             var s = Settings.Default;
             AppLog.Info($"Re-applying saved mode ({reason})");
@@ -286,6 +355,8 @@ namespace OmenFanPlus.Services
                 // "Off" is never switched on automatically: it needs the warning the button shows.
                 ApplyThermalMode(s.PerformanceMode);
             }
+
+            return _lastRc;
         }
 
         /// <summary>
@@ -320,6 +391,10 @@ namespace OmenFanPlus.Services
                     AppLog.Info($"Handed the fans back to the BIOS on exit (release rc={releaseRc}, mode rc={modeRc})");
                 }
             }
+            catch (Exception ex)
+            {
+                AppLog.Error("Handing the fans back to the BIOS on exit failed", ex);
+            }
             finally
             {
                 Monitor.Exit(_applyLock);
@@ -339,7 +414,7 @@ namespace OmenFanPlus.Services
                 }
 
                 var rc = _client.SetSwFanControlLevel(100, 100);
-                if (rc != 0)
+                if ((rc == 0) != LastResultOk)
                     Report("Max", rc);
             }
             catch (Exception ex)
@@ -354,19 +429,26 @@ namespace OmenFanPlus.Services
 
         private void StopMaxKeepAlive() => _maxKeepAlive.Change(Timeout.Infinite, Timeout.Infinite);
 
-        /// <summary>Hands manual fan control back to the BIOS, only with the commands this board has.</summary>
+        /// <summary>
+        /// Hands manual fan control back to the BIOS, only with the commands this board has. Max fan is switched
+        /// off before the level is released, the order the Linux driver uses.
+        /// </summary>
         private int ReleaseManualFanControl()
         {
             var rc = 0;
-            if (Capabilities.ManualFanControlSupported)
-                rc = _client.SetSwFanControlLevel(0, 0);
-
             if (Capabilities.ManualFanControlSupported || Capabilities.MaxFanSupported)
             {
                 var maxRc = _client.SetMaxFan(MaxFanMode.Off);
                 // Boards with manual levels but no 0x26 reject 0x27; that isn't a failure to release.
-                if (rc == 0 && Capabilities.MaxFanSupported)
+                if (Capabilities.MaxFanSupported)
                     rc = maxRc;
+            }
+
+            if (Capabilities.ManualFanControlSupported)
+            {
+                var levelRc = _client.SetSwFanControlLevel(0, 0);
+                if (rc == 0)
+                    rc = levelRc;
             }
 
             return rc;
@@ -381,6 +463,11 @@ namespace OmenFanPlus.Services
             try
             {
                 return !_shuttingDown && action();
+            }
+            catch (Exception ex)
+            {
+                AppLog.Error($"{what} failed", ex);
+                return Report(what, -1);
             }
             finally
             {
@@ -400,21 +487,38 @@ namespace OmenFanPlus.Services
             s.fanCustom = custom;
             if (mode != null)
                 s.PerformanceMode = mode.Value;
-            s.Save();
+            TrySave();
         }
+
+        // The BIOS has already been set by the time this runs; a locked or full disk must not take the app down.
+        internal static void TrySave()
+        {
+            try
+            {
+                Settings.Default.Save();
+            }
+            catch (Exception ex)
+            {
+                AppLog.Warn($"Couldn't save the settings: {ex.Message}");
+            }
+        }
+
+        private int _lastRc;
 
         private bool Report(string what, int rc, int releaseRc = 0)
         {
             var ok = rc == 0;
+            _lastRc = rc;
+            LastResultOk = ok && releaseRc == 0;
             Status = rc switch
             {
-                0 when releaseRc != 0 => $"{what} applied, but fans not released (code {releaseRc})",
+                0 when releaseRc != 0 => $"{what}, applied, but fans not released (code {releaseRc})",
                 0 => $"{what}, applied {DateTime.Now:HH:mm}",
                 NotSupported => $"{what} isn't supported on this laptop",
                 > 0 => $"{what} rejected by BIOS (code {rc})",
                 _ => $"{what} not applied (BIOS not reachable)",
             };
-            if (ok && releaseRc == 0) AppLog.Info(Status);
+            if (LastResultOk) AppLog.Info(Status);
             else AppLog.Warn(Status);
 
             StatusChanged?.Invoke(this, EventArgs.Empty);
@@ -426,6 +530,7 @@ namespace OmenFanPlus.Services
             switch (e.Mode)
             {
                 case PowerModes.Resume:
+                    _applyRetry = 0;
                     ScheduleReapply("resume from sleep", TimeSpan.FromSeconds(5));
                     break;
                 case PowerModes.StatusChange:
@@ -435,13 +540,14 @@ namespace OmenFanPlus.Services
                     if (line != _lastPowerLine)
                     {
                         _lastPowerLine = line;
+                        _applyRetry = 0;
                         ScheduleReapply($"power source changed to {line}", TimeSpan.FromSeconds(3));
                     }
                     break;
             }
         }
 
-        private void ScheduleReapply(string reason, TimeSpan delay, bool isProbeRetry = false)
+        private void ScheduleReapply(string reason, TimeSpan delay, bool isProbeRetry = false, bool isApplyRetry = false)
         {
             if (_shuttingDown)
                 return;
@@ -454,14 +560,14 @@ namespace OmenFanPlus.Services
                 try
                 {
                     await Task.Delay(delay, cts.Token);
-                    if (Capabilities.ProbeComplete)
+                    if (Capabilities?.ProbeComplete == true)
                     {
                         ApplySavedMode(reason);
                     }
                     else
                     {
                         // A wake-up or charger change is a new chance for WMI to be ready: restart the back-off.
-                        if (!isProbeRetry)
+                        if (!isProbeRetry && !isApplyRetry)
                             _probeRetry = 0;
                         ProbeAndApply(reason);
                     }

@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Management;
 using System.Threading;
@@ -28,7 +29,14 @@ namespace Hp.Ohl.WmiService
         private static readonly object CallLock = new();
         private static readonly TimeSpan CallLockTimeout = TimeSpan.FromSeconds(15);
         private static readonly TimeSpan CallTimeout = TimeSpan.FromSeconds(10);
-        private static ManagementObject _classInstance;
+
+        // A call that timed out is still running on its worker thread. No new call is started behind it for
+        // OrphanGrace (BIOS writes must stay in order), and never more than MaxOrphans of them are left hanging.
+        private static readonly TimeSpan OrphanGrace = TimeSpan.FromSeconds(60);
+        private const int MaxOrphans = 3;
+        private static readonly List<(Task Call, DateTime TimedOutAt)> Orphans = new();
+
+        private static volatile ManagementObject _classInstance;
 
         // Looked up on first use (and again after a WMI failure) rather than in a static constructor,
         // so a WMI provider that isn't ready yet at logon doesn't disable BIOS calls for the whole session.
@@ -36,15 +44,17 @@ namespace Hp.Ohl.WmiService
         {
             get
             {
-                if (_classInstance == null)
+                var instance = _classInstance;
+                if (instance == null)
                 {
                     var searcher = new ManagementObjectSearcher(new ManagementScope(@"root\wmi"),
                         new ObjectQuery("SELECT * FROM hpqBIntM"), new EnumerationOptions { Timeout = CallTimeout });
-                    _classInstance = searcher.Get().OfType<ManagementObject>().FirstOrDefault()
-                                     ?? throw new InvalidOperationException("HP BIOS WMI interface (hpqBIntM) not found");
+                    instance = searcher.Get().OfType<ManagementObject>().FirstOrDefault()
+                               ?? throw new InvalidOperationException("HP BIOS WMI interface (hpqBIntM) not found");
+                    _classInstance = instance;
                 }
 
-                return _classInstance;
+                return instance;
             }
         }
 
@@ -59,14 +69,19 @@ namespace Hp.Ohl.WmiService
 
             try
             {
+                RefuseWhileOrphansRun();
+
                 // None of the WMI calls involved (connecting, looking up hpqBIntM, fetching the parameter classes,
                 // InvokeMethod) has a usable time limit of its own, so the whole call runs on a worker thread and
                 // the caller stops waiting after CallTimeout. A call that hangs keeps its thread; the next call
                 // looks the interface up again.
                 var call = Task.Run(() => Invoke(command, commandType, size, biosData));
                 if (Task.WaitAny(new Task[] { call }, CallTimeout) < 0)
+                {
+                    lock (Orphans) Orphans.Add((call, DateTime.UtcNow));
                     throw new TimeoutException(
                         $"HP BIOS command 0x{command:X} type 0x{commandType:X2} did not answer within {CallTimeout.TotalSeconds:0} s");
+                }
                 return call.GetAwaiter().GetResult();
             }
             catch (Exception ex) when (ex is not HpBiosException)
@@ -82,10 +97,26 @@ namespace Hp.Ohl.WmiService
             }
         }
 
+        // Caller holds CallLock.
+        private static void RefuseWhileOrphansRun()
+        {
+            lock (Orphans)
+            {
+                Orphans.RemoveAll(o => o.Call.IsCompleted);
+                if (Orphans.Count == 0)
+                    return;
+                if (Orphans.Count >= MaxOrphans)
+                    throw new TimeoutException($"{Orphans.Count} HP BIOS calls are still hanging in WMI; not starting another");
+                if (DateTime.UtcNow - Orphans[^1].TimedOutAt < OrphanGrace)
+                    throw new TimeoutException("The previous HP BIOS call is still running in WMI");
+            }
+        }
+
         private static HpBiosDataOut Invoke(uint command, uint commandType, uint size, byte[] biosData)
         {
             ManagementObject dataIn = new ManagementClass(@"root\wmi:hpqBDataIn");
-            var inParams = ClassInstance.GetMethodParameters(@"hpqBIOSInt128");
+            var instance = ClassInstance;
+            var inParams = instance.GetMethodParameters(@"hpqBIOSInt128");
 
             dataIn["Command"] = command;
             dataIn["CommandType"] = commandType;
@@ -94,11 +125,11 @@ namespace Hp.Ohl.WmiService
             dataIn["Sign"] = Sign;
             inParams["InData"] = dataIn;
 
-            var outParams = ClassInstance.InvokeMethod($"hpqBIOSInt{size}", inParams, null);
+            var outParams = instance.InvokeMethod($"hpqBIOSInt{size}", inParams, null);
             var dataOut = (ManagementBaseObject) outParams?["OutData"];
             if (dataOut == null)
             {
-                throw new Exception("BIOS not responding to WMI command");
+                throw new InvalidOperationException("BIOS not responding to WMI command");
             }
 
             var returnCode = (uint) dataOut.Properties["rwReturnCode"].Value;

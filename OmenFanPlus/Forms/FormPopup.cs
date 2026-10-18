@@ -1,5 +1,5 @@
 ﻿using Hp.Omen.OmenCommonLib.PowerControl.Enum;
-using OmenHubLight.Lib;
+using OmenFanPlus.Lib;
 using OmenFanPlus.Models;
 using OmenFanPlus.Properties;
 using OmenFanPlus.Services;
@@ -24,6 +24,13 @@ namespace OmenFanPlus.Forms
         private int _curveBusy;
         private readonly ToolTip _temperatureToolTip = new();
         private readonly ToolTip _modeToolTip = new() { AutoPopDelay = 15000 };
+        private readonly Label _statusLabel = new();
+        private long _hiddenByDeactivateAt;
+        private int _focusAttempts;
+
+        // Windows may refuse to give a background app the foreground (e.g. over a full-screen game);
+        // stop asking after this many tries instead of hammering Activate() at 100 Hz.
+        private const int MaxFocusAttempts = 50;
 
         internal FormPopup(FanModeController fanModes)
         {
@@ -37,9 +44,18 @@ namespace OmenFanPlus.Forms
             fanList.AutoSize = false;
             fanList.SetBounds(DefaultButton.Left, fanList.Top, PerformanceButton.Right - DefaultButton.Left, fanList.Height);
 
+            // One line under the buttons that always shows the last BIOS result, so a rejected mode is visible
+            // even on boards whose fan label is busy showing RPM.
+            _statusLabel.AutoSize = false;
+            _statusLabel.AutoEllipsis = true;
+            _statusLabel.ForeColor = Color.FromArgb(180, 180, 180);
+            _statusLabel.TextAlign = ContentAlignment.MiddleLeft;
+            _statusLabel.Anchor = AnchorStyles.Top | AnchorStyles.Left;
+            Controls.Add(_statusLabel);
+
             focusTimer.Tick += delegate
             {
-                if (ApplicationIsActivated())
+                if (ApplicationIsActivated() || ++_focusAttempts > MaxFocusAttempts)
                     focusTimer.Stop();
                 else
                     Activate();
@@ -71,6 +87,7 @@ namespace OmenFanPlus.Forms
             {
                 ApplyCapabilities();
                 ShowSavedMode();
+                UpdateStatusLabel();
                 if (!_fanModes.HasFanSpeeds)
                     fanList.Text = _fanModes.Status;
 
@@ -106,8 +123,29 @@ namespace OmenFanPlus.Forms
                 button.Anchor = AnchorStyles.Top | AnchorStyles.Left;
 
             OffButton.Visible = MaxButton.Visible = CustomButton.Visible = CustomCogButton.Visible = manual;
-            ClientSize = new Size(ClientSize.Width, (manual ? OffButton.Bottom : DefaultButton.Bottom) + _bottomMargin);
+            var rowBottom = manual ? OffButton.Bottom : DefaultButton.Bottom;
+            _statusLabel.SetBounds(QuietButton.Left, rowBottom + 6, PerformanceButton.Right - QuietButton.Left, 18);
+            ClientSize = new Size(ClientSize.Width, _statusLabel.Bottom + _bottomMargin);
             ResumeLayout();
+
+            if (Visible)
+                PlaceAboveTaskbar();
+        }
+
+        private void UpdateStatusLabel()
+        {
+            _statusLabel.Text = _fanModes.Status;
+            _statusLabel.ForeColor = _fanModes.LastResultOk ? Color.FromArgb(180, 180, 180) : Color.FromArgb(255, 170, 60);
+            if (_modeToolTip.GetToolTip(_statusLabel) != _fanModes.Status)
+                _modeToolTip.SetToolTip(_statusLabel, _fanModes.Status);
+        }
+
+        // Centred above the taskbar of the screen the mouse is on, whatever its scaling.
+        private void PlaceAboveTaskbar()
+        {
+            var area = Screen.FromPoint(Cursor.Position).WorkingArea;
+            var margin = LogicalToDeviceUnits(12);
+            Location = new Point(area.Left + (area.Width - Width) / 2, area.Bottom - Height - margin);
         }
 
         private void SetModeToolTips(PerformanceMode thirdMode)
@@ -142,15 +180,15 @@ namespace OmenFanPlus.Forms
 
         public new void Show()
         {
+            PlaceAboveTaskbar();
+            UpdateStatusLabel();
             base.Show();
+            _focusAttempts = 0;
             focusTimer.Start();
             UpdateTempInfo(new object(), EventArgs.Empty);
 
-            var screenBounds = Screen.FromPoint(Cursor.Position).Bounds; // FromPoint never returns null
-            var xPos = (screenBounds.Width / 2) - (Width / 2) + screenBounds.X;
-            var yPos = (screenBounds.Height + screenBounds.Top) - (Height + 50);
-
-            Location = new Point(xPos, yPos);
+            // If the BIOS hadn't answered by the last retry, opening the popup is a good moment to ask again.
+            _fanModes.RequestProbe("popup opened");
 
             if (activeButton != null)
             {
@@ -158,6 +196,27 @@ namespace OmenFanPlus.Forms
                 activeButton.Select();
             }
             updateTextTimer.Start();
+        }
+
+        /// <summary>
+        /// Toggle from the tray icon. Clicking the icon first deactivates the popup (which hides it) and only then
+        /// delivers the click, so a click that arrives right after that hide must not reopen it.
+        /// </summary>
+        public void TrayClicked()
+        {
+            if (!Visible && Environment.TickCount64 - _hiddenByDeactivateAt < 500)
+                return;
+            OmenKeyPressed();
+        }
+
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            if (keyData == Keys.Escape)
+            {
+                Hide();
+                return true;
+            }
+            return base.ProcessCmdKey(ref msg, keyData);
         }
         public new void Hide()
         {
@@ -196,6 +255,7 @@ namespace OmenFanPlus.Forms
             StopCurveTimer();
             _fanModes.ApplyThermalMode(_fanModes.Capabilities.QuietOrCoolMode);
             ShowSavedMode();
+            UpdateStatusLabel();
         }
 
         private void DefaultButton_Click(object sender, EventArgs e)
@@ -203,6 +263,7 @@ namespace OmenFanPlus.Forms
             StopCurveTimer();
             _fanModes.ApplyThermalMode(PerformanceMode.Default);
             ShowSavedMode();
+            UpdateStatusLabel();
         }
 
         private void PerformanceButton_Click(object sender, EventArgs e)
@@ -210,6 +271,7 @@ namespace OmenFanPlus.Forms
             StopCurveTimer();
             _fanModes.ApplyThermalMode(PerformanceMode.Performance);
             ShowSavedMode();
+            UpdateStatusLabel();
         }
 
         private void OffButton_Click(object sender, EventArgs e)
@@ -220,6 +282,7 @@ namespace OmenFanPlus.Forms
                 StopCurveTimer();
                 _fanModes.ApplyOff();
                 ShowSavedMode();
+                UpdateStatusLabel();
             }
         }
 
@@ -228,12 +291,14 @@ namespace OmenFanPlus.Forms
             StopCurveTimer();
             _fanModes.ApplyMax();
             ShowSavedMode();
+            UpdateStatusLabel();
         }
 
         private void CustomButton_Click(object sender, EventArgs e)
         {
             _fanModes.ApplyCustom();
             ShowSavedMode();
+            UpdateStatusLabel();
             StartCurveTimer();
         }
 
@@ -246,7 +311,16 @@ namespace OmenFanPlus.Forms
             if (editor.ShowDialog() == DialogResult.OK)
             {
                 _fanCurveProfile = editor.Result;
-                _fanCurveProfile.Save();
+                try
+                {
+                    _fanCurveProfile.Save();
+                }
+                catch (Exception ex)
+                {
+                    AppLog.Error("Saving the fan curve failed", ex);
+                    MessageBox.Show($"The curve is in use but couldn't be saved: {ex.Message}", "OmenFanPlus",
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
             }
         }
 
@@ -289,13 +363,13 @@ namespace OmenFanPlus.Forms
                     float? gpuTemp = t.Gpu ?? t.Cpu;
                     int gpuFan = gpuTemp is float gpu ? profile.GetFanSpeed(profile.GpuCurve, gpu) : 100;
 
-                    _fanModes.SetFanLevels(Math.Max(cpuFan, 1), Math.Max(gpuFan, 1));
+                    _fanModes.SetFanLevelsPercent(cpuFan, gpuFan);
                 }
                 catch (Exception ex)
                 {
                     // Don't leave the fans at the last curve level when the temperature can't be read.
                     AppLog.Error("Custom fan curve update failed; running the fans at full speed", ex);
-                    _fanModes.SetFanLevels(100, 100);
+                    _fanModes.SetFanLevelsPercent(100, 100);
                 }
                 finally
                 {
@@ -393,6 +467,8 @@ namespace OmenFanPlus.Forms
 
         private void FormPopup_Leave(object sender, EventArgs e)
         {
+            if (Visible)
+                _hiddenByDeactivateAt = Environment.TickCount64;
             Hide();
         }
 

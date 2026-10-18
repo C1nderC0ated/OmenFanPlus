@@ -4,7 +4,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Win32;
 using OmenFanPlus.Properties;
-using OmenHubLight.Lib;
+using OmenFanPlus.Lib;
 
 namespace OmenFanPlus.Services
 {

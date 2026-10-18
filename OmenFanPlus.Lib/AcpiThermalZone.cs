@@ -2,7 +2,7 @@ using System;
 using System.Linq;
 using System.Management;
 
-namespace OmenHubLight.Lib
+namespace OmenFanPlus.Lib
 {
     /// <summary>
     /// Reads the ACPI thermal zones through Windows' own performance counters. Needs no driver.

@@ -36,7 +36,7 @@
             this.AltBtn = new System.Windows.Forms.Button();
             this.ShiftBtn = new System.Windows.Forms.Button();
             this.OKButton = new System.Windows.Forms.Button();
-            this.CancelButton = new System.Windows.Forms.Button();
+            this.CancelBtn = new System.Windows.Forms.Button();
             this.enableRemappingCheckbox = new System.Windows.Forms.CheckBox();
             this.tableLayoutPanel1 = new System.Windows.Forms.TableLayoutPanel();
             this.execProgramCheckbox = new System.Windows.Forms.CheckBox();
@@ -160,20 +160,20 @@
             // 
             // CancelButton
             // 
-            this.CancelButton.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)));
-            this.CancelButton.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(64)))), ((int)(((byte)(64)))), ((int)(((byte)(64)))));
-            this.CancelButton.BackgroundImageLayout = System.Windows.Forms.ImageLayout.None;
-            this.CancelButton.FlatAppearance.BorderSize = 0;
-            this.CancelButton.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
-            this.CancelButton.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(230)))), ((int)(((byte)(230)))), ((int)(((byte)(230)))));
-            this.CancelButton.Location = new System.Drawing.Point(12, 233);
-            this.CancelButton.Margin = new System.Windows.Forms.Padding(0);
-            this.CancelButton.Name = "CancelButton";
-            this.CancelButton.Size = new System.Drawing.Size(61, 23);
-            this.CancelButton.TabIndex = 14;
-            this.CancelButton.Text = "Cancel";
-            this.CancelButton.UseVisualStyleBackColor = false;
-            this.CancelButton.Click += new System.EventHandler(this.CancelButton_Click);
+            this.CancelBtn.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)));
+            this.CancelBtn.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(64)))), ((int)(((byte)(64)))), ((int)(((byte)(64)))));
+            this.CancelBtn.BackgroundImageLayout = System.Windows.Forms.ImageLayout.None;
+            this.CancelBtn.FlatAppearance.BorderSize = 0;
+            this.CancelBtn.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
+            this.CancelBtn.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(230)))), ((int)(((byte)(230)))), ((int)(((byte)(230)))));
+            this.CancelBtn.Location = new System.Drawing.Point(12, 233);
+            this.CancelBtn.Margin = new System.Windows.Forms.Padding(0);
+            this.CancelBtn.Name = "CancelBtn";
+            this.CancelBtn.Size = new System.Drawing.Size(61, 23);
+            this.CancelBtn.TabIndex = 14;
+            this.CancelBtn.Text = "Cancel";
+            this.CancelBtn.UseVisualStyleBackColor = false;
+            this.CancelBtn.Click += new System.EventHandler(this.CancelBtn_Click);
             // 
             // enableRemappingCheckbox
             // 
@@ -298,7 +298,7 @@
             this.Controls.Add(this.selectFileButton);
             this.Controls.Add(this.execProgramCheckbox);
             this.Controls.Add(this.enableRemappingCheckbox);
-            this.Controls.Add(this.CancelButton);
+            this.Controls.Add(this.CancelBtn);
             this.Controls.Add(this.tableLayoutPanel1);
             this.Controls.Add(this.OKButton);
             this.Controls.Add(this.IdentifyButton);
@@ -328,7 +328,7 @@
         private Button AltBtn;
         private Button ShiftBtn;
         private Button OKButton;
-        private new Button CancelButton;
+        private Button CancelBtn;
         private CheckBox enableRemappingCheckbox;
         private TableLayoutPanel tableLayoutPanel1;
         private CheckBox execProgramCheckbox;

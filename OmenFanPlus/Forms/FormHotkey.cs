@@ -1,46 +1,47 @@
 ﻿using OmenFanPlus.Properties;
+using OmenFanPlus.Services;
 using System.Diagnostics;
 
 namespace OmenFanPlus.Forms
 {
+    /// <summary>
+    /// "Remap OMEN key to...": the key chord or program the OMEN key triggers instead of the popup.
+    /// Changes are kept locally and written only on OK, so Cancel (or Esc) really cancels.
+    /// </summary>
     public partial class FormHotkey : Form
     {
-
         private bool isListening = false;
         private Keys selectedKey;
+        private bool _loading = true;
+
         public FormHotkey()
         {
             InitializeComponent();
+            AcceptButton = OKButton;
+            CancelButton = CancelBtn;
 
-            try
-            {
-                selectedKey = Settings.Default.AlternateKey;
-            }
-            catch (Exception)
-            {
-                selectedKey = Keys.None;
-            }
+            // Real key codes only: no aliases, no mouse buttons, no modifier-only entries.
+            var keys = Enum.GetValues<Keys>()
+                .Where(k => k != Keys.None && ((int)k & 0xFFFF) == (int)k && (int)k > 0 &&
+                            k is not (Keys.ShiftKey or Keys.ControlKey or Keys.Menu or
+                                      Keys.LButton or Keys.RButton or Keys.MButton or Keys.XButton1 or Keys.XButton2))
+                .Distinct()
+                .ToList();
+            keyListCombobox.DataSource = keys;
 
-            keyListCombobox.DataSource = Enum.GetValues<Keys>();
+            selectedKey = Settings.Default.AlternateKey;
             enableRemappingCheckbox.Checked = Settings.Default.UseOmenAlternateKey;
             execProgramCheckbox.Checked = Settings.Default.UseOmenKeyExecute;
-            selectedKey = Settings.Default.AlternateKey;
             fileExecPath.Text = Settings.Default.ExecutePath;
             fileExecArguments.Text = Settings.Default.ExecuteArguments;
+            _loading = false;
             UpdateUI();
         }
 
         private void IdentifyButton_Click(object sender, EventArgs e)
         {
             isListening = !isListening;
-            if (isListening)
-            {
-                IdentifyButton.Text = "Listening...";
-            }
-            else
-            {
-                IdentifyButton.Text = "Identify";
-            }
+            IdentifyButton.Text = isListening ? "Listening..." : "Identify";
         }
 
         private readonly Color activeColor = Color.FromArgb(153, 153, 153);
@@ -52,20 +53,14 @@ namespace OmenFanPlus.Forms
         {
             if (isListening)
             {
-                Keys noModifiersKey = ((Keys)((int)keyData & ~-65536));
-
-                if (noModifiersKey == Keys.ShiftKey || noModifiersKey == Keys.ControlKey || noModifiersKey == Keys.Menu)
-                {
+                var noModifiersKey = keyData & Keys.KeyCode;
+                if (noModifiersKey is Keys.ShiftKey or Keys.ControlKey or Keys.Menu)
                     return true;
-                }
+
                 selectedKey = keyData;
-
-                Invoke(UpdateUI);
-
-                // Reset listening state
-                IdentifyButton_Click(new object(), EventArgs.Empty);
+                UpdateUI();
+                IdentifyButton_Click(this, EventArgs.Empty);
                 enableRemappingCheckbox.Checked = true;
-
                 return true;    // indicate that you handled this keystroke
             }
 
@@ -73,38 +68,57 @@ namespace OmenFanPlus.Forms
             return base.ProcessCmdKey(ref msg, keyData);
         }
 
-        private void CancelButton_Click(object sender, EventArgs e)
+        private void CancelBtn_Click(object sender, EventArgs e)
         {
+            DialogResult = DialogResult.Cancel;
             Close();
         }
 
         private void OKButton_Click(object sender, EventArgs e)
         {
+            if (enableRemappingCheckbox.Checked && (selectedKey & Keys.KeyCode) == Keys.None)
+            {
+                MessageBox.Show("Pick a key to send, or untick 'Remap key'.", "OmenFanPlus",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            var path = fileExecPath.Text.Trim();
+            if (execProgramCheckbox.Checked && !File.Exists(path))
+            {
+                MessageBox.Show("Pick an existing program to run, or untick 'Execute program'.", "OmenFanPlus",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
             Settings.Default.AlternateKey = selectedKey;
-            Settings.Default.Save();
+            Settings.Default.UseOmenAlternateKey = enableRemappingCheckbox.Checked;
+            Settings.Default.UseOmenKeyExecute = execProgramCheckbox.Checked;
+            Settings.Default.ExecutePath = path;
+            Settings.Default.ExecuteArguments = fileExecArguments.Text;
+            FanModeController.TrySave();
+            DialogResult = DialogResult.OK;
             Close();
         }
 
         private void enableRemappingCheckbox_CheckedChanged(object sender, EventArgs e)
         {
-            if (enableRemappingCheckbox.Checked)
+            if (!_loading && enableRemappingCheckbox.Checked)
                 execProgramCheckbox.Checked = false;
-            Settings.Default.UseOmenAlternateKey = enableRemappingCheckbox.Checked;
-            Settings.Default.Save();
         }
 
         private void keyListCombobox_SelectedIndexChanged(object? sender, EventArgs e)
         {
             if (keyListCombobox.SelectedItem is not Keys key)
                 return;
-            selectedKey = key;
-            if (Created)
-                Invoke(UpdateUI);
+            // Keep Ctrl/Alt/Shift that were toggled before the key was picked.
+            selectedKey = (selectedKey & Keys.Modifiers) | key;
+            UpdateUI();
         }
 
         private void UpdateUI()
         {
-            Keys noModifiersKey = ((Keys)((int)selectedKey & ~-65536));
+            var noModifiersKey = selectedKey & Keys.KeyCode;
 
             // Dont trigger event
             keyListCombobox.SelectedIndexChanged -= keyListCombobox_SelectedIndexChanged;
@@ -121,37 +135,26 @@ namespace OmenFanPlus.Forms
 
         private void CtrlButton_Click(object sender, EventArgs e)
         {
-            if (selectedKey.HasFlag(Keys.Control))
-                selectedKey &= ~Keys.Control;
-            else
-                selectedKey |= Keys.Control;
+            selectedKey ^= Keys.Control;
             UpdateUI();
         }
 
         private void AltBtn_Click(object sender, EventArgs e)
         {
-            if (selectedKey.HasFlag(Keys.Alt))
-                selectedKey &= ~Keys.Alt;
-            else
-                selectedKey |= Keys.Alt;
+            selectedKey ^= Keys.Alt;
             UpdateUI();
         }
 
         private void ShiftBtn_Click(object sender, EventArgs e)
         {
-            if (selectedKey.HasFlag(Keys.Shift))
-                selectedKey &= ~Keys.Shift;
-            else
-                selectedKey |= Keys.Shift;
+            selectedKey ^= Keys.Shift;
             UpdateUI();
         }
 
         private void execProgramCheckbox_CheckedChanged(object sender, EventArgs e)
         {
-            if (execProgramCheckbox.Checked)
+            if (!_loading && execProgramCheckbox.Checked)
                 enableRemappingCheckbox.Checked = false;
-            Settings.Default.UseOmenKeyExecute = execProgramCheckbox.Checked;
-            Settings.Default.Save();
         }
 
         private void selectFileButton_Click(object sender, EventArgs e)
@@ -166,32 +169,27 @@ namespace OmenFanPlus.Forms
 
         private void fileExecPath_TextChanged(object sender, EventArgs e)
         {
-            Settings.Default.ExecutePath = fileExecPath.Text;
-            Settings.Default.Save();
         }
 
         private void testBtn_Click(object sender, EventArgs e)
         {
-            Process p = new Process();
-            ProcessStartInfo pi = new ProcessStartInfo();
-            pi.UseShellExecute = true;
-            pi.FileName = Settings.Default.ExecutePath;
-            pi.Arguments = Settings.Default.ExecuteArguments;
-            p.StartInfo = pi;
             try
             {
-                p.Start();
+                Process.Start(new ProcessStartInfo
+                {
+                    UseShellExecute = true,
+                    FileName = fileExecPath.Text.Trim(),
+                    Arguments = fileExecArguments.Text,
+                });
             }
-            catch (Exception Ex)
+            catch (Exception ex)
             {
-                MessageBox.Show(Ex.Message);
+                MessageBox.Show(ex.Message, "OmenFanPlus", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         }
 
         private void fileExecArguments_TextChanged(object sender, EventArgs e)
         {
-            Settings.Default.ExecuteArguments = fileExecArguments.Text;
-            Settings.Default.Save();
         }
     }
 }

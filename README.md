@@ -11,7 +11,7 @@ It continues **OMEN Hub Lighter Plus** ([P2GR/OmenHubLighterPlus](https://github
 - **No more WinRing0.** The bundled 2020 OpenHardwareMonitor copy installed the WinRing0 kernel driver, which has a known vulnerability (CVE-2020-14979) and is on Microsoft's vulnerable-driver blocklist. Temperatures now come from [LibreHardwareMonitorLib](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) 0.9.6:
   - **CPU:** the processor's own sensor (Intel, and AMD Ryzen) through the signed [PawnIO](https://pawnio.eu) driver, if it is installed. Otherwise the ACPI thermal zone, which needs no driver. Hover the CPU temperature in the popup to see which source is in use.
   - **GPU:** NVIDIA's NVAPI (AMD: ADL), which run in user mode.
-- **Only the modes your laptop supports.** At startup the app asks the BIOS what it supports, using read-only commands, and shows only those buttons. Older OMENs without manual fan control get **Default / Performance / Comfort**; laptops with it keep Quiet / Default / Performance plus Off / Max / Custom curve. *Comfort* is the name HP's OMEN Command Center used for its Cool profile on these laptops: it lowers CPU and GPU temperatures and starts the fans earlier, so it isn't a quiet mode; Default is usually the quietest (hover a button for details).
+- **Only the modes your laptop supports.** At startup the app asks the BIOS what it supports, using read-only commands, and shows only those buttons. Older OMENs without manual fan control get **Default / Performance / Comfort**; laptops with it also get Off / Max / Custom curve. The third mode is **Quiet** on Victus boards (HP's device list decides) and **Comfort** on OMEN boards. *Comfort* is the name HP's OMEN Command Center used for its Cool profile on these laptops: it lowers CPU and GPU temperatures and starts the fans earlier, so it isn't a quiet mode; Default is usually the quietest (hover a button for details).
 - **The saved mode is sent again** at startup, after sleep and when the charger is plugged in or out (the firmware refuses Performance on battery). Before, the button lit up but nothing was sent. Max is re-sent every 90 s, because the firmware hands manual fan levels back to automatic after about 2 minutes; Off is deliberately left to lapse, so the BIOS takes the fans back.
 - **Fans go back to the BIOS on exit.** Quitting releases Max, Off or the custom curve, then sets the saved thermal mode.
 - **Honest status.** If the BIOS rejects a command, the popup and the tray tooltip say so, and everything is logged to `%LOCALAPPDATA%\OmenFanPlus\OmenFanPlus.log` (tray menu > *Open log folder*).
@@ -84,15 +84,15 @@ Since OMEN Gaming Hub is a huge project, determ1ne only implemented a small part
 Currently, the application supports the following features:
 
 - ~~Four Zone Keyboard Light~~ (Maybe in the future)
-- Thermal modes through the BIOS (command 0x1A): Default / Performance / Comfort (HP's Cool profile) on older OMENs, Quiet / Default / Performance on newer boards
+- Thermal modes through the BIOS (command 0x1A): Default / Performance / Comfort (HP's Cool profile) on OMEN boards, Default / Performance / Quiet on Victus boards
 - Fan Max / Off and a **Custom Fan Curve**, only where the BIOS supports manual fan levels (commands 0x2D/0x2E)
 
 ### What works on which laptop
 
 | BIOS answers | Buttons shown |
 | --- | --- |
-| 0x2D GetFanLevel works | Quiet, Default, Performance, Off, Max, Custom |
-| 0x2D and 0x28 both unsupported (e.g. OMEN 15-dc1xxx, board 8574, BIOS F.29) | Default, Performance, Comfort |
+| 0x2D GetFanLevel works | Comfort (Quiet on Victus), Default, Performance, Off, Max, Custom |
+| 0x2D unsupported (e.g. OMEN 15-dc1xxx, board 8574, BIOS F.29) | Default, Performance, Comfort |
 
 On the OMEN 15-dc1xxx the BIOS has no max-fan or manual fan command, so the old "Max" button only ever switched to Performance. HP's own platform list agrees (no max-fan support for board 8574). Real manual fan control there would need direct writes to the embedded controller. [OmenCore](https://github.com/theantipopau/omencore) tries that, but its 8574 profile is unverified and the one report from identical hardware (15-dc1077tx, BIOS F.29) saw no working curve or max mode, so this app deliberately doesn't write to the embedded controller.
 
@@ -104,6 +104,10 @@ I was able to find most of what I need by decompiling `HP.Omen.Background.FanCon
 
 Build with `dotnet build OmenFanPlus.sln -c Release`. `tests\Test-InstallScript.ps1` checks `install.ps1` without running it: its bytes, that it parses, that the install-folder guard refuses the wrong folders, and that the guard runs before anything else.
 
-OmenDriverPatcher (C++, no longer part of the solution) patched the memory of HP's HSA services to use the LPC service of HP's driver. Its offsets don't match current HP service builds; don't run it.
+Projects: `OmenFanPlus` (the app), `OmenFanPlus.Hp` (HP BIOS WMI access, reverse-engineered from OMEN Gaming Hub) and `OmenFanPlus.Lib` (temperatures). The original repository's OmenDriverPatcher (a C++ tool that patched HP's services) and EventWatcher console tool were removed in 2.0; they are still in the git history on `main`.
+
+### Custom curve scale (boards with manual fan control)
+
+The BIOS takes fan levels in units of 100 rpm, not percent, and only a band of them is useful (OmenMon observed levels 20-55, i.e. 2,000-5,500 rpm). The curve editor keeps its 0-100 % scale and maps it onto that band: 0 % stops the fan, 1 % is the slowest it runs, 100 % the fastest. The band isn't read from the BIOS yet; if your board answers the 0x2F fan-table query, its raw bytes are written to the log so the real limits can be decoded from it.
 
 Third-party components and their licenses are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

@@ -12,11 +12,10 @@ through NuGet:
 | Mono.Posix.NETStandard | MIT | https://github.com/mono/mono |
 | TaskScheduler (Microsoft.Win32.TaskScheduler) | MIT | https://github.com/dahall/TaskScheduler |
 | WindowsInput | MIT | https://github.com/MediatedCommunications/WindowsInput |
-| Newtonsoft.Json | MIT | https://github.com/JamesNK/Newtonsoft.Json |
 | System.Management, System.IO.Ports | MIT | https://github.com/dotnet/runtime |
 
 The MPL-2.0 and LGPL-2.1 components are used as unmodified libraries; their source is available at the links
 above. PawnIO itself (the driver) is not bundled; it is installed separately from https://pawnio.eu.
 
-HPShimLibrary contains code and data (device lists) derived from HP's OMEN Gaming Hub; the MIT license of this
+OmenFanPlus.Hp contains code derived from HP's OMEN Gaming Hub; the MIT license of this
 project does not cover HP's material.

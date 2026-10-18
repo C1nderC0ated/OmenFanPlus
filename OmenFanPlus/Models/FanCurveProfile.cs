@@ -20,8 +20,15 @@ namespace OmenFanPlus.Models
         public int CompareTo(FanCurvePoint? other) => Temperature.CompareTo(other?.Temperature ?? 0);
     }
 
+    /// <summary>
+    /// Per-fan curves of temperature (°C) to fan speed in percent. 0 % stops the fan; 1-100 % maps onto the
+    /// board's usable fan-level range (see <see cref="LevelFromPercent"/>).
+    /// </summary>
     public class FanCurveProfile
     {
+        /// <summary>The fan level the BIOS treats as "stopped"; the same value the Off button sends.</summary>
+        public const int StoppedLevel = 1;
+
         public List<FanCurvePoint> CpuCurve { get; set; } = new();
         public List<FanCurvePoint> GpuCurve { get; set; } = new();
 
@@ -29,26 +36,23 @@ namespace OmenFanPlus.Models
         {
             return new FanCurveProfile
             {
-                CpuCurve = new List<FanCurvePoint>
-                {
-                    new(30, 0),
-                    new(50, 30),
-                    new(70, 60),
-                    new(85, 100)
-                },
-                GpuCurve = new List<FanCurvePoint>
-                {
-                    new(30, 0),
-                    new(50, 30),
-                    new(70, 60),
-                    new(85, 100)
-                }
+                CpuCurve = DefaultCurve(),
+                GpuCurve = DefaultCurve(),
             };
         }
 
+        private static List<FanCurvePoint> DefaultCurve() => new()
+        {
+            new(30, 0),
+            new(50, 30),
+            new(70, 60),
+            new(85, 100)
+        };
+
+        /// <summary>Fan speed in percent for a temperature. A missing curve means full speed, never a stopped fan.</summary>
         public int GetFanSpeed(List<FanCurvePoint> curve, float temperature)
         {
-            if (curve == null || curve.Count == 0) return 0;
+            if (curve == null || curve.Count == 0) return 100;
             var sorted = curve.OrderBy(p => p.Temperature).ToList();
 
             if (temperature <= sorted[0].Temperature)
@@ -70,6 +74,28 @@ namespace OmenFanPlus.Models
             return sorted[^1].FanSpeed;
         }
 
+        /// <summary>
+        /// BIOS fan level (units of 100 RPM) for a curve percentage. The BIOS levels start at the fan's lowest
+        /// running speed, so 1 % is the slowest the fan can turn and 0 % stops it.
+        /// </summary>
+        public static int LevelFromPercent(int percent, int minLevel, int maxLevel)
+        {
+            percent = Math.Clamp(percent, 0, 100);
+            if (percent == 0)
+                return StoppedLevel;
+            return (int)Math.Round(minLevel + (maxLevel - minLevel) * (percent - 1) / 99.0);
+        }
+
+        /// <summary>Inverse of <see cref="LevelFromPercent"/>, for showing a BIOS level on the curve.</summary>
+        public static int PercentFromLevel(int level, int minLevel, int maxLevel)
+        {
+            if (level <= StoppedLevel)
+                return 0;
+            if (maxLevel <= minLevel)
+                return 100;
+            return Math.Clamp((int)Math.Round(1 + (level - minLevel) * 99.0 / (maxLevel - minLevel)), 1, 100);
+        }
+
         private static string StorePath
         {
             get
@@ -82,10 +108,14 @@ namespace OmenFanPlus.Models
             }
         }
 
+        /// <summary>Writes the curves; the file is replaced in one step so a crash can't leave it half written.</summary>
         public void Save()
         {
             var options = new JsonSerializerOptions { WriteIndented = true };
-            File.WriteAllText(StorePath, JsonSerializer.Serialize(this, options));
+            var path = StorePath;
+            var temp = path + ".tmp";
+            File.WriteAllText(temp, JsonSerializer.Serialize(this, options));
+            File.Move(temp, path, overwrite: true);
         }
 
         public static FanCurveProfile Load()
@@ -101,12 +131,24 @@ namespace OmenFanPlus.Models
                     if (!File.Exists(path)) return CreateDefault();
                 }
                 var json = File.ReadAllText(path);
-                return JsonSerializer.Deserialize<FanCurveProfile>(json) ?? CreateDefault();
+                var profile = JsonSerializer.Deserialize<FanCurveProfile>(json) ?? CreateDefault();
+                profile.CpuCurve = Validated(profile.CpuCurve);
+                profile.GpuCurve = Validated(profile.GpuCurve);
+                return profile;
             }
-            catch
+            catch (Exception ex)
             {
+                Services.AppLog.Warn($"Couldn't read the fan curve file; using the default curve ({ex.Message})");
                 return CreateDefault();
             }
+        }
+
+        // The JSON reader bypasses the clamping constructor, so a hand-edited file can hold anything.
+        private static List<FanCurvePoint> Validated(List<FanCurvePoint>? curve)
+        {
+            if (curve == null || curve.Count < 2)
+                return DefaultCurve();
+            return curve.Select(p => new FanCurvePoint(p.Temperature, p.FanSpeed)).ToList();
         }
     }
 }

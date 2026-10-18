@@ -2,7 +2,7 @@ using System;
 using LibreHardwareMonitor.Hardware;
 using PawnIoInfo = LibreHardwareMonitor.PawnIo.PawnIo;
 
-namespace OmenHubLight.Lib
+namespace OmenFanPlus.Lib
 {
     public enum CpuTemperatureSource
     {
@@ -85,21 +85,29 @@ namespace OmenHubLight.Lib
                     float? gpu = null;
                     foreach (var hardware in _computer.Hardware)
                     {
-                        switch (hardware.HardwareType)
+                        try
                         {
-                            case HardwareType.Cpu:
-                                hardware.Update();
-                                cpu ??= FindCpuTemperature(hardware);
-                                break;
-                            case HardwareType.GpuNvidia:
-                            case HardwareType.GpuAmd:
-                                if (!updateGpu)
+                            switch (hardware.HardwareType)
+                            {
+                                case HardwareType.Cpu:
+                                    hardware.Update();
+                                    cpu ??= FindCpuTemperature(hardware);
                                     break;
-                                hardware.Update();
-                                var core = FindTemperature(hardware, "GPU Core");
-                                if (core != null && (gpu == null || core > gpu))
-                                    gpu = core;
-                                break;
+                                case HardwareType.GpuNvidia:
+                                case HardwareType.GpuAmd:
+                                    if (!updateGpu)
+                                        break;
+                                    hardware.Update();
+                                    var core = FindTemperature(hardware, "GPU Core");
+                                    if (core != null && (gpu == null || core > gpu))
+                                        gpu = core;
+                                    break;
+                            }
+                        }
+                        catch (Exception)
+                        {
+                            // One failing sensor library (e.g. a driver that disappeared) must not take the
+                            // others down; the caller falls back for whatever stays null.
                         }
                     }
 

@@ -3,11 +3,9 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.4.33213.308
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "HpShimLibrary", "HPShimLibrary\HpShimLibrary.csproj", "{7687196D-2D97-482E-9E2A-14705CD0CB2E}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OmenFanPlus.Hp", "OmenFanPlus.Hp\OmenFanPlus.Hp.csproj", "{7687196D-2D97-482E-9E2A-14705CD0CB2E}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OmenHubLight.EventWatcher", "OmenHubLight.EventWatcher\OmenHubLight.EventWatcher.csproj", "{A471EB80-836F-4AA8-93FF-7A6B71A3A7E1}"
-EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OmenHubLight.Lib", "OmenHubLight.Lib\OmenHubLight.Lib.csproj", "{7D8C7921-9311-41FA-8262-BF21F19B6CD6}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OmenFanPlus.Lib", "OmenFanPlus.Lib\OmenFanPlus.Lib.csproj", "{7D8C7921-9311-41FA-8262-BF21F19B6CD6}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OmenFanPlus", "OmenFanPlus\OmenFanPlus.csproj", "{25C21FB9-69B5-47F3-914E-9E2621054501}"
 EndProject
@@ -27,14 +25,6 @@ Global
 		{7687196D-2D97-482E-9E2A-14705CD0CB2E}.Release|Any CPU.Build.0 = Release|x64
 		{7687196D-2D97-482E-9E2A-14705CD0CB2E}.Release|x64.ActiveCfg = Release|x64
 		{7687196D-2D97-482E-9E2A-14705CD0CB2E}.Release|x64.Build.0 = Release|x64
-		{A471EB80-836F-4AA8-93FF-7A6B71A3A7E1}.Debug|Any CPU.ActiveCfg = Debug|x64
-		{A471EB80-836F-4AA8-93FF-7A6B71A3A7E1}.Debug|Any CPU.Build.0 = Debug|x64
-		{A471EB80-836F-4AA8-93FF-7A6B71A3A7E1}.Debug|x64.ActiveCfg = Debug|x64
-		{A471EB80-836F-4AA8-93FF-7A6B71A3A7E1}.Debug|x64.Build.0 = Debug|x64
-		{A471EB80-836F-4AA8-93FF-7A6B71A3A7E1}.Release|Any CPU.ActiveCfg = Release|x64
-		{A471EB80-836F-4AA8-93FF-7A6B71A3A7E1}.Release|Any CPU.Build.0 = Release|x64
-		{A471EB80-836F-4AA8-93FF-7A6B71A3A7E1}.Release|x64.ActiveCfg = Release|x64
-		{A471EB80-836F-4AA8-93FF-7A6B71A3A7E1}.Release|x64.Build.0 = Release|x64
 		{7D8C7921-9311-41FA-8262-BF21F19B6CD6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{7D8C7921-9311-41FA-8262-BF21F19B6CD6}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{7D8C7921-9311-41FA-8262-BF21F19B6CD6}.Debug|x64.ActiveCfg = Debug|Any CPU

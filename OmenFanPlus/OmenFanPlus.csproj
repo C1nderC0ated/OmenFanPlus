@@ -16,6 +16,8 @@
 		<Product>OmenFanPlus</Product>
 		<!-- Keep the version shown in the app as "2.0.0" rather than "2.0.0+<commit>". -->
 		<IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+		<!-- The UI is English only; this drops the TaskScheduler package's 11 language folders from the install. -->
+		<SatelliteResourceLanguages>en</SatelliteResourceLanguages>
 	</PropertyGroup>
 
 	<ItemGroup>
@@ -26,8 +28,8 @@
 	</ItemGroup>
 
 	<ItemGroup>
-		<ProjectReference Include="..\HPShimLibrary\HpShimLibrary.csproj" />
-		<ProjectReference Include="..\OmenHubLight.Lib\OmenHubLight.Lib.csproj" />
+		<ProjectReference Include="..\OmenFanPlus.Hp\OmenFanPlus.Hp.csproj" />
+		<ProjectReference Include="..\OmenFanPlus.Lib\OmenFanPlus.Lib.csproj" />
 	</ItemGroup>
 
 	<ItemGroup>

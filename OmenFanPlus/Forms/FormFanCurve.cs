@@ -1,6 +1,6 @@
 using OmenFanPlus.Models;
 using OmenFanPlus.Services;
-using OmenHubLight.Lib;
+using OmenFanPlus.Lib;
 using System.Drawing.Drawing2D;
 
 namespace OmenFanPlus.Forms
@@ -31,33 +31,47 @@ namespace OmenFanPlus.Forms
             StartLiveUpdates();
         }
 
+        private int _liveBusy;
+
         private void StartLiveUpdates()
         {
             _liveTimer = new System.Windows.Forms.Timer { Interval = 1000 };
             _liveTimer.Tick += (s, e) =>
             {
+                // One reading at a time; a slow WMI call must not pile up tasks.
+                if (Interlocked.Exchange(ref _liveBusy, 1) == 1)
+                    return;
+
                 Task.Run(() =>
                 {
                     try
                     {
                         var temperatures = TemperatureService.Read();
-                        float cpuTemp = temperatures.Cpu ?? 0f;
-                        float gpuTemp = temperatures.Gpu ?? 0f;
+                        // -1 means "no reading": the panel then draws no live marker instead of one at 0 °C.
+                        float cpuTemp = temperatures.Cpu ?? -1f;
+                        float gpuTemp = temperatures.Gpu ?? temperatures.Cpu ?? -1f;
 
-                        List<int> fanLevels = _fanModes.GetFanLevels();
-                        int cpuFanPct = fanLevels.Count > 0 ? fanLevels[0] : 0;
-                        int gpuFanPct = fanLevels.Count > 1 ? fanLevels[1] : cpuFanPct;
+                        List<int> fanPercents = _fanModes.GetFanLevelsPercent();
+                        int cpuFanPct = fanPercents.Count > 0 ? fanPercents[0] : -1;
+                        int gpuFanPct = fanPercents.Count > 1 ? fanPercents[1] : cpuFanPct;
 
-                        if (!IsDisposed)
+                        if (!IsDisposed && IsHandleCreated)
                         {
-                            Invoke(() =>
+                            BeginInvoke(() =>
                             {
                                 cpuPanel.SetLiveData(cpuTemp, cpuFanPct);
                                 gpuPanel.SetLiveData(gpuTemp, gpuFanPct);
                             });
                         }
                     }
-                    catch { }
+                    catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException)
+                    {
+                        // The editor was closed while the reading was in flight.
+                    }
+                    finally
+                    {
+                        Interlocked.Exchange(ref _liveBusy, 0);
+                    }
                 });
             };
             _liveTimer.Start();
@@ -138,6 +152,24 @@ namespace OmenFanPlus.Forms
             buttonPanel.Controls.Add(btnCancel);
             buttonPanel.Controls.Add(btnReset);
             Controls.Add(buttonPanel);
+
+            var scaleNote = new Label
+            {
+                Dock = DockStyle.Bottom,
+                Height = 20,
+                ForeColor = Color.FromArgb(150, 150, 150),
+                TextAlign = ContentAlignment.MiddleLeft,
+                Padding = new Padding(8, 0, 0, 0),
+                Text = $"0 % stops the fan; 1-100 % spans the fan's running range (about " +
+                       $"{_fanModes.Capabilities.FanLevelMin * 100}-{_fanModes.Capabilities.FanLevelMax * 100} rpm). " +
+                       "Left-click adds or drags a point, right-click removes one.",
+            };
+            Controls.Add(scaleNote);
+            scaleNote.BringToFront();
+            buttonPanel.BringToFront();
+
+            AcceptButton = btnSave;
+            CancelButton = btnCancel;
         }
 
         private Button CreateButton(string text)
@@ -286,7 +318,7 @@ namespace OmenFanPlus.Forms
                 // Label
                 using var liveFont = new Font("Segoe UI", 8f, FontStyle.Bold);
                 using var liveLabelBrush = new SolidBrush(Color.FromArgb(255, 220, 60));
-                string label = $"{_liveTemp:F0}° / {_liveFanSpeed}%";
+                string label = _liveFanSpeed >= 0 ? $"{_liveTemp:F0}° / {_liveFanSpeed}%" : $"{_liveTemp:F0}° / fan n/a";
                 g.DrawString(label, liveFont, liveLabelBrush, livePt.X + 10, livePt.Y - 18);
             }
         }
@@ -297,7 +329,8 @@ namespace OmenFanPlus.Forms
 
             if (e.Button == MouseButtons.Right)
             {
-                // Right-click on a point: delete it (keep min 2 points)
+                // Right-click on a point: delete it (keep min 2 points). A drag in progress ends here.
+                _dragIndex = -1;
                 int idx = HitTest(e.X, e.Y);
                 if (idx >= 0 && _points.Count > 2)
                 {
@@ -329,7 +362,7 @@ namespace OmenFanPlus.Forms
         protected override void OnMouseMove(MouseEventArgs e)
         {
             base.OnMouseMove(e);
-            if (_dragIndex >= 0 && e.Button == MouseButtons.Left)
+            if (_dragIndex >= 0 && _dragIndex < _points.Count && e.Button == MouseButtons.Left)
             {
                 var (temp, speed) = ScreenToTempSpeed(e.X, e.Y);
                 _points[_dragIndex] = new FanCurvePoint(temp, speed);

@@ -12,6 +12,9 @@ namespace Hp.Omen.OmenCommonLib
 {
     public class OmenHsaClient
     {
+        /// <summary>Returned instead of a BIOS code when this code refuses to send a command.</summary>
+        public const int UnsupportedReturnCode = -2;
+
         private static readonly object SystemDesignDataLock = new();
         private static byte[] _systemDesignData;
         private static bool _systemDesignDataUnsupported;
@@ -88,7 +91,9 @@ namespace Hp.Omen.OmenCommonLib
         /// Like <see cref="BiosWmiCmd_Get(uint, uint, byte[], uint)"/>, but reports why a command failed.
         /// Returns 0 on success, the BIOS rwReturnCode if the BIOS rejected the command, or -1 if WMI itself failed.
         /// </summary>
-        public int TryBiosWmiCmd_Get(uint command, uint commandType, byte[] inputData, uint returnDataSize, out byte[] data)
+        /// <param name="quiet">A "not available" answer (rc 3/4) is expected (capability probe): log it as info.</param>
+        public int TryBiosWmiCmd_Get(uint command, uint commandType, byte[] inputData, uint returnDataSize, out byte[] data,
+            bool quiet = false)
         {
             data = null;
             try
@@ -98,7 +103,11 @@ namespace Hp.Omen.OmenCommonLib
             }
             catch (HpBiosException ex)
             {
-                OutputLogError($"command 0x{command:X} type 0x{commandType:X2}: {ex.Message}");
+                var text = $"command 0x{command:X} type 0x{commandType:X2}: {ex.Message}";
+                if (quiet && ex.ReturnCode is 3 or 4)
+                    OMENEventSource.Log.Info(text);
+                else
+                    OutputLogError(text);
                 return (int)ex.ReturnCode;
             }
             catch (Exception ex)
@@ -190,8 +199,18 @@ namespace Hp.Omen.OmenCommonLib
                 "8748"
             }).Contains<string>(OmenSMBiosHelper.SystemID))
                 thermalPolicyVersion = ThermalPolicyVersion.V0;
-            OMENEventSource.Log.Info("GetThermalPolicyVersion(), version = " + thermalPolicyVersion.ToString());
+            OMENEventSource.Log.Verbose("GetThermalPolicyVersion(), version = " + thermalPolicyVersion.ToString());
             return thermalPolicyVersion;
+        }
+
+        /// <summary>
+        /// Raw answer of the read-only 0x2F fan-table query (fan levels per temperature step), or null.
+        /// Only logged for now; the layout hasn't been verified on a board that answers it.
+        /// </summary>
+        public byte[] GetFanTableRaw()
+        {
+            var rc = TryBiosWmiCmd_Get(131080, 0x2F, new byte[4], 128, out var data, quiet: true);
+            return rc == 0 ? data : null;
         }
 
         /// <summary>
@@ -242,10 +261,11 @@ namespace Hp.Omen.OmenCommonLib
                 255,
                 (byte)mode
             };
-            OMENEventSource.Log.Info("SetFanModeAsync(), mode = " + mode);
+            OMENEventSource.Log.Verbose("SetFanModeAsync(), mode = " + mode);
             if (isMapped)
             {
-                switch (GetThermalPolicyVersion())
+                var version = GetThermalPolicyVersion();
+                switch (version)
                 {
                     case ThermalPolicyVersion.V1:
                         switch (mode)
@@ -270,6 +290,11 @@ namespace Hp.Omen.OmenCommonLib
                         }
 
                         break;
+                    default:
+                        // The design data names a thermal policy this code has no table for; sending a raw value
+                        // could pick an undefined profile. Linux hp-wmi refuses such boards too.
+                        OutputLogError($"Thermal policy version {(int)version} is unknown; not sending mode {mode}");
+                        return UnsupportedReturnCode;
                 }
 
                 array[1] = (byte)mode;

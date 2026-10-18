@@ -50,8 +50,9 @@ namespace OmenFanPlus.Forms
             };
             TaskbarChangeOmenKey.Click += (sender, e) =>
             {
-                var hotkey = new FormHotkey();
-                hotkey.Show();
+                // Modal, so two copies of the dialog can't overwrite each other's settings.
+                using var hotkey = new FormHotkey();
+                hotkey.ShowDialog();
             };
 
             TaskbarRunOnStartup.Checked = Settings.Default.RunAtStartup;
@@ -129,7 +130,21 @@ namespace OmenFanPlus.Forms
             TaskbarNotifyIcon.Text = text.Length > 127 ? text[..127] : text;
         }
 
+        // Runs on the WMI event thread. An exception escaping an async void handler ends the process, so nothing
+        // here may throw.
         public async void WmiEventWatcher_HpBiosEventArrived(object sender, HpBiosEventArgs e)
+        {
+            try
+            {
+                await HandleBiosEventAsync(e);
+            }
+            catch (Exception ex)
+            {
+                AppLog.Error("Handling an HP BIOS event failed", ex);
+            }
+        }
+
+        private async Task HandleBiosEventAsync(HpBiosEventArgs e)
         {
             if (e.eventPayload is OmenKeyPressedPayload)
             {
@@ -170,19 +185,22 @@ namespace OmenFanPlus.Forms
                         {
                             p.Start();
                         }
-                        catch (Exception Ex)
+                        catch (Exception ex)
                         {
-                            MessageBox.Show(Ex.Message);
+                            AppLog.Error("Starting the OMEN-key program failed", ex);
+                            if (IsHandleCreated && !IsDisposed)
+                                BeginInvoke(() => TaskbarNotifyIcon.ShowBalloonTip(5000, "OmenFanPlus",
+                                    $"Couldn't start the program for the OMEN key: {ex.Message}", ToolTipIcon.Warning));
                         }
                     }
-                    else
+                    else if (IsHandleCreated && !IsDisposed)
                     {
                         Invoke(popup.OmenKeyPressed);
                     }
-
                 }
-                catch
+                catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException)
                 {
+                    // The app is closing.
                 }
             }
             else if (e.eventPayload is WinKeyLockPayload WinkeyPayload)
@@ -210,35 +228,44 @@ namespace OmenFanPlus.Forms
 
         private void TaskbarNotifyIcon_Click(object sender, MouseEventArgs e)
         {
-            try
-            {
-                if (e.Button == MouseButtons.Left)
-                {
-                    Invoke(popup.OmenKeyPressed);
-                }
-            }
-            catch
-            {
-            }
+            if (e.Button == MouseButtons.Left)
+                popup.TrayClicked();
         }
 
-        private static void SetRunOnStartup(bool runOnStartup)
+        private void SetRunOnStartup(bool runOnStartup)
         {
+            var applied = false;
             try
             {
                 if (!runOnStartup)
+                {
                     StartupTask.Unregister();
-                else if (!StartupTask.Register())
+                    applied = true;
+                }
+                else if (StartupTask.Register())
+                {
+                    applied = true;
+                }
+                else
+                {
                     MessageBox.Show(
                         "Only the installed copy can start at logon. Run install.ps1, then tick 'Run on startup' " +
                         @"in the copy in C:\Program Files\OmenFanPlus.",
                         "OmenFanPlus", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
             }
             catch (Exception ex)
             {
                 AppLog.Error("Changing the startup task failed", ex);
                 MessageBox.Show($"Could not change the startup task: {ex.Message}", "OmenFanPlus",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+
+            // Don't leave the tick claiming something the task scheduler refused.
+            if (!applied && Settings.Default.RunAtStartup != !runOnStartup)
+            {
+                Settings.Default.RunAtStartup = !runOnStartup;
+                FanModeController.TrySave();
             }
         }
     }

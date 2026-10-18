@@ -88,6 +88,13 @@ namespace Hp.Omen.OmenCommonLib.Utilities
             if (IsEnabled()) WriteEvent(10, source, key, value);
         }
 
+        /// <summary>Chatter that duplicates the app's own log lines; only visible when verbose logging is enabled.</summary>
+        [Event(11, Level = EventLevel.Verbose, Message = "{0}")]
+        public void Verbose(string message)
+        {
+            if (IsEnabled(EventLevel.Verbose, EventKeywords.None)) WriteEvent(11, TruncateContentIfNeeded(message));
+        }
+
         private string TruncateContentIfNeeded(string content)
         {
             if (content != null && content.Length >= NUMBER_OF_MAX_CHARS_TO_LOG_FOR_CONTENT)

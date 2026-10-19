@@ -102,7 +102,16 @@ namespace OmenFanPlus.Services
             Line("    $lock.ReleaseMutex()");
             Line("}");
             Line("$lock.Dispose()");
-            Line("if (-not $NoRestart -and (Test-Path -LiteralPath $Exe)) { Start-Process -FilePath $Exe -WorkingDirectory (Split-Path -Path $Exe -Parent) }");
+            Line("if (-not $NoRestart -and (Test-Path -LiteralPath $Exe)) {");
+            Line("    # Through the startup task where it points at this exe: the Task Scheduler starts the app the way logon");
+            Line("    # does, with nothing inherited from this script (no environment, no package identity of a packaged shell).");
+            Line($"    $task = Get-ScheduledTask -TaskName '{StartupTask.TaskName}' -ErrorAction SilentlyContinue");
+            Line("    $viaTask = $false");
+            Line("    if ($null -ne $task -and $task.State -ne 'Disabled' -and ([string]@($task.Actions)[0].Execute).Trim('\"') -ieq $Exe) {");
+            Line("        try { Start-ScheduledTask -InputObject $task -ErrorAction Stop; $viaTask = $true } catch { }");
+            Line("    }");
+            Line("    if (-not $viaTask) { Start-Process -FilePath $Exe -WorkingDirectory (Split-Path -Path $Exe -Parent) }");
+            Line("}");
             return sb.ToString();
         }
 

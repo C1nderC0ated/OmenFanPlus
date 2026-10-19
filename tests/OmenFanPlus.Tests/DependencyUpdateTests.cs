@@ -376,7 +376,9 @@ public class DependencyUpdateTests
         Assert.Contains("\"DotNetRuntime 10.0.14 $code\"", script);
         Assert.Contains("app-still-running", script);
         Assert.Contains("$lock.ReleaseMutex()", script);
-        Assert.Contains("Start-Process -FilePath $Exe", script);
+        Assert.Contains("Get-ScheduledTask -TaskName 'OmenFanPlusStartup'", script);   // the restart goes through the task when it exists
+        Assert.Contains("Start-ScheduledTask -InputObject $task", script);
+        Assert.Contains("Start-Process -FilePath $Exe", script);                        // and falls back to a plain start
         Assert.DoesNotContain("OmenFanPlus.exe", script); // the app's path is never written into the script
     }
 

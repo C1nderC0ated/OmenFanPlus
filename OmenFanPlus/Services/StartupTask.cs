@@ -10,7 +10,7 @@ namespace OmenFanPlus.Services
     /// </summary>
     internal static class StartupTask
     {
-        private const string TaskName = "OmenFanPlusStartup";
+        internal const string TaskName = "OmenFanPlusStartup";
 
         /// <summary>The task created by versions before the rename to OmenFanPlus.</summary>
         private const string LegacyTaskName = "OmenHubLighterPlusStartup";

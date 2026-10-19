@@ -216,8 +216,30 @@ if (($task -or $legacyTask) -and -not $inProgramFiles) {
 if ($NoStart) {
     Write-Host "[6/6] Not starting the app (-NoStart)."
 } else {
-    Write-Host "[6/6] Starting $exe"
-    Start-Process -FilePath $exe -WorkingDirectory $InstallDir
+    # Through the startup task where it points at this exe: the Task Scheduler starts the app the way logon
+    # does, with nothing inherited from this shell. A shell started by a packaged (Store/MSIX) app passes its
+    # package identity on to whatever it starts, and Windows then redirects that process's AppData into the
+    # package's private store, where File Explorer and the next normal start of the app can't find it.
+    $started = $false
+    $startTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    if ($startTask -and $startTask.State -ne 'Disabled' -and ([string]@($startTask.Actions)[0].Execute).Trim('"') -ieq $exe) {
+        try {
+            Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
+            $deadline = (Get-Date).AddSeconds(15)
+            while (-not $started -and (Get-Date) -lt $deadline) {
+                Start-Sleep -Milliseconds 500
+                $started = [bool]@(Get-Process -Name $appName -ErrorAction SilentlyContinue | Where-Object { $_.Path -ieq $exe })
+            }
+        } catch {
+            Write-Host "      the $taskName task didn't start it ($($_.Exception.Message))"
+        }
+    }
+    if ($started) {
+        Write-Host "[6/6] Started $exe through the $taskName task"
+    } else {
+        Write-Host "[6/6] Starting $exe"
+        Start-Process -FilePath $exe -WorkingDirectory $InstallDir
+    }
 }
 
 $log = Join-Path $env:LOCALAPPDATA "$appName\$appName.log"

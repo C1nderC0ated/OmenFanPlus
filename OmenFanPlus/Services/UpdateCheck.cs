@@ -373,6 +373,7 @@ namespace OmenFanPlus.Services
                 if (response.StatusCode == HttpStatusCode.NotFound)
                 {
                     report.AppendLine("  No release has been published yet. To update, pull the latest code and run install.ps1 again.");
+                    AppLog.Info($"Update check: OmenFanPlus {current}, no release published yet");
                     return;
                 }
 

@@ -34,9 +34,11 @@ It continues **OMEN Hub Lighter Plus** ([P2GR/OmenHubLighterPlus](https://github
 - New enum values for fan control (Quiet mode wasn't working for me in the original version)
 - Fan speed text
 
-![Fan control menu](<https://raw.githubusercontent.com/P2GR/OmenHubLighterPlus/master/README Images/fan_control.png>)
-![Fan curve editor](<https://raw.githubusercontent.com/P2GR/OmenHubLighterPlus/master/README Images/fan_curve.png>)
-![Remap menu](<https://raw.githubusercontent.com/P2GR/OmenHubLighterPlus/master/README Images/remap.png>)
+Screenshots from the previous version (OmenFanPlus looks the same with a purple icon, dark menus, the *Comfort* label and an *Auto* button):
+
+![Fan control menu](<README Images/fan_control.png>)
+![Fan curve editor](<README Images/fan_curve.png>)
+![Remap menu](<README Images/remap.png>)
 
 ## Why I need it?
 
@@ -69,19 +71,25 @@ Requirements: Windows 10/11 x64, the **.NET 10 Desktop Runtime (x64)** to run it
 
 Some Windows editions (e.g. LTSC) come without winget, and the download links work everywhere.
 
-Then, from an elevated PowerShell in this folder:
+Get the code (or download the ZIP from the green *Code* button on GitHub):
+
+```
+git clone https://github.com/C1nderC0ated/OmenFanPlus.git
+```
+
+Then, from an elevated PowerShell in that folder:
 
 ```
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-`install.ps1` builds the app and asks any running copy to quit (it hands the fans back to the BIOS first). It stops old OmenHubLighterPlus builds and removes the WinRing0 driver service that builds before 2.0 left behind. Then it installs to `C:\Program Files\OmenFanPlus`, replaces the old `OmenHubLighterPlusStartup` task with `OmenFanPlusStartup`, and starts the installed copy. Run it again after pulling changes. Don't keep using an old OmenHubLighterPlus build from a `bin` folder: builds before 2.0 load WinRing0 again.
+`install.ps1` builds the app and asks any running copy to quit (it hands the fans back to the BIOS first). It stops old OmenHubLighterPlus builds and removes the WinRing0 driver service that builds before 2.0 left behind. Then it installs to `C:\Program Files\OmenFanPlus`, replaces the old `OmenHubLighterPlusStartup` task with `OmenFanPlusStartup`, and starts the installed copy. To update the app, `git pull` and run it again. Don't keep using an old OmenHubLighterPlus build from a `bin` folder: builds before 2.0 load WinRing0 again.
 
-**Optional: PawnIO** for the CPU's own temperature sensor (otherwise the ACPI thermal zone is used, which follows the CPU closely on the OMEN 15-dc1xxx). PawnIO is a signed driver that works with Memory Integrity and the vulnerable-driver blocklist turned on; install it with one of the options in the table above and restart OmenFanPlus afterwards. To **update** PawnIO or the .NET runtime later, quit OmenFanPlus first: the app keeps the PawnIO driver open (so the driver can't be replaced while it runs), and the runtime installer removes the version the app is running on. Restart Windows if the PawnIO installer asks for it.
+**Optional: PawnIO** for the CPU's own temperature sensor (otherwise the ACPI thermal zone is used, which follows the CPU closely on the OMEN 15-dc1xxx). PawnIO is a signed driver that works with Memory Integrity and the vulnerable-driver blocklist turned on; install it with one of the options in the table above and restart OmenFanPlus afterwards. To **update** PawnIO or the .NET runtime later, let the app do it (tray menu > *Check for updates...*, see [Dependency updates](#dependency-updates)) or quit OmenFanPlus first and use the table above: the app keeps the PawnIO driver open (so the driver can't be replaced while it runs), and the runtime installer removes the version the app is running on. Restart Windows if the PawnIO installer asks for it.
 
 ## How to use it?
 
-Since OMEN Gaming Hub is a huge project, determ1ne only implemented a small part of it which their notebook (OMEN 15-dc0xxx, i7-8750H with NVIDIA GTX 1060) needed. But I also added features for my notebook (Victus 16-d0xxx, i7-11800H with NVIDIA RTX 3060).
+Since OMEN Gaming Hub is a huge project, determ1ne only implemented a small part of it which their notebook (OMEN 15-dc0xxx, i7-8750H with NVIDIA GTX 1060) needed. P2GR, the previous maintainer, added features for their notebook (Victus 16-d0xxx, i7-11800H with NVIDIA RTX 3060). OmenFanPlus 2.0 was developed and tested on an OMEN 15-dc1xxx (i5-9300H, RTX 2060, board 8574, BIOS F.29); see [What works on which laptop](#what-works-on-which-laptop) for what that means for other models.
 
 Currently, the application supports the following features:
 

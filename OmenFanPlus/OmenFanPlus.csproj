@@ -13,7 +13,7 @@
 		<RuntimeIdentifier>win-x64</RuntimeIdentifier>
 		<SelfContained>false</SelfContained>
 		<!-- The one place the version lives: a release tag must be "v" + this (the release workflow checks). -->
-		<Version>2.1.1</Version>
+		<Version>2.1.2</Version>
 		<Product>OmenFanPlus</Product>
 		<!-- Keep the version shown in the app as "2.0.0" rather than "2.0.0+<commit>". -->
 		<IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>

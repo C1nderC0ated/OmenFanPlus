@@ -213,5 +213,29 @@ namespace OmenFanPlus.Properties {
             }
         }
 
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("False")]
+        public bool AutoInstallUpdates {
+            get {
+                return ((bool)(this["AutoInstallUpdates"]));
+            }
+            set {
+                this["AutoInstallUpdates"] = value;
+            }
+        }
+
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("")]
+        public string LastInstallAttempt {
+            get {
+                return ((string)(this["LastInstallAttempt"]));
+            }
+            set {
+                this["LastInstallAttempt"] = value;
+            }
+        }
+
     }
 }

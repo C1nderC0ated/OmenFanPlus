@@ -10,8 +10,10 @@ namespace OmenFanPlus
 {
     internal static class Program
     {
-        private const string InstanceName = @"Local\OmenFanPlus";
-        private const string QuitEventName = @"Local\OmenFanPlus.Quit";
+        // The update script opens both by name: the event to ask the app to quit, the mutex to keep a copy from
+        // starting while the installers run.
+        internal const string InstanceName = @"Local\OmenFanPlus";
+        internal const string QuitEventName = @"Local\OmenFanPlus.Quit";
         private static FanModeController? _fanModes;
 
         /// <summary>

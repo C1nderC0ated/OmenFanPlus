@@ -24,12 +24,23 @@ namespace OmenFanPlus.Forms
             AddMenuItems();
             DarkMenuRenderer.Apply(contextMenuStrip1);
 
-            _updates.UpdateAvailable += (sender, message) =>
-            {
-                if (IsHandleCreated && !IsDisposed)
-                    BeginInvoke(() => TaskbarNotifyIcon.ShowBalloonTip(10000, "Update available", message, ToolTipIcon.Info));
-            };
+            _updates.UpdateAvailable += (sender, message) => Balloon("Update available", message, ToolTipIcon.Info);
+            _updates.InstallProgress += (sender, message) => Balloon("OmenFanPlus update", message, ToolTipIcon.Info);
             FormClosed += (sender, e) => _updates.Dispose();
+
+            // What the update script did while the app was closed, shown once the tray icon is up.
+            var lastUpdate = UpdateRunner.TakeResult();
+            if (lastUpdate != null)
+            {
+                AppLog.Info($"Last update: {lastUpdate.ReplaceLineEndings(" | ")}");
+                var showResult = new System.Windows.Forms.Timer { Interval = 3000 };
+                showResult.Tick += (sender, e) =>
+                {
+                    showResult.Dispose();
+                    TaskbarNotifyIcon.ShowBalloonTip(15000, "OmenFanPlus update", lastUpdate, ToolTipIcon.Info);
+                };
+                showResult.Start();
+            }
 
             UpdateTrayText();
             _fanModes.StatusChanged += (sender, e) =>
@@ -87,8 +98,7 @@ namespace OmenFanPlus.Forms
                 checkUpdates.Enabled = false;
                 try
                 {
-                    var report = await _updates.RunAsync(notify: false);
-                    MessageBox.Show(report, "OmenFanPlus updates", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    await CheckForUpdatesAsync();
                 }
                 finally
                 {
@@ -108,6 +118,24 @@ namespace OmenFanPlus.Forms
                 Settings.Default.Save();
             };
 
+            // Off by default: with it on, the daily check also downloads, verifies and installs what it finds,
+            // closing and restarting the app to do so.
+            var autoInstall = new ToolStripMenuItem("Install updates automatically")
+            {
+                CheckOnClick = true,
+                Checked = Settings.Default.AutoInstallUpdates,
+                ToolTipText = "Downloads .NET runtime and PawnIO updates from their publishers, checks their hashes and " +
+                              "signatures, then closes OmenFanPlus, installs them and starts it again. Needs the automatic " +
+                              "check and the installed copy in Program Files.",
+            };
+            autoInstall.CheckedChanged += (sender, e) =>
+            {
+                Settings.Default.AutoInstallUpdates = autoInstall.Checked;
+                if (autoInstall.Checked)
+                    autoCheck.Checked = true; // saves CheckForUpdates through its own handler
+                Settings.Default.Save();
+            };
+
             var openLog = new ToolStripMenuItem("Open log folder");
             openLog.Click += (sender, e) =>
             {
@@ -117,8 +145,39 @@ namespace OmenFanPlus.Forms
 
             var quitIndex = contextMenuStrip1.Items.IndexOf(TaskbarQuit);
             contextMenuStrip1.Items.Insert(quitIndex, openLog);
+            contextMenuStrip1.Items.Insert(quitIndex, autoInstall);
             contextMenuStrip1.Items.Insert(quitIndex, autoCheck);
             contextMenuStrip1.Items.Insert(quitIndex, checkUpdates);
+        }
+
+        private async Task CheckForUpdatesAsync()
+        {
+            var report = await _updates.RunAsync(notify: false);
+            if (report.Available.Count == 0 || _updates.IsInstalling || !DependencyInstaller.CanInstall)
+            {
+                MessageBox.Show(report.Text, "OmenFanPlus updates", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            var names = string.Join(" and ", report.Available.Select(u => $"{u.DisplayName} {u.Version}"));
+            var answer = MessageBox.Show(
+                report.Text + Environment.NewLine +
+                $"Install {names} now?" + Environment.NewLine + Environment.NewLine +
+                "OmenFanPlus downloads the installer from the publisher, checks its hash and signature, then closes, " +
+                "installs it and starts again. Nothing else is touched, and Windows is not restarted.",
+                "OmenFanPlus updates", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            if (answer != DialogResult.Yes)
+                return;
+
+            var error = await _updates.InstallAsync(report.Available);
+            if (error != null)
+                MessageBox.Show(error, "OmenFanPlus updates", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+
+        private void Balloon(string title, string message, ToolTipIcon icon)
+        {
+            if (IsHandleCreated && !IsDisposed)
+                BeginInvoke(() => TaskbarNotifyIcon.ShowBalloonTip(10000, title, message, icon));
         }
 
         private void UpdateTrayText()

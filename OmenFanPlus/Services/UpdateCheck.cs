@@ -2,20 +2,22 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
-using Microsoft.Win32;
 using OmenFanPlus.Properties;
 using OmenFanPlus.Lib;
 
 namespace OmenFanPlus.Services
 {
+    /// <summary>What a check found: the text for the dialog, and the updates the app can install itself.</summary>
+    internal sealed record UpdateReport(string Text, IReadOnlyList<AvailableUpdate> Available);
+
     /// <summary>
-    /// Checks whether the .NET runtime or PawnIO has a newer release and tells the user how to update
-    /// (2 minutes after the app starts, then every 24 hours, unless turned off in the tray menu).
-    /// Nothing is downloaded or installed automatically: the runtime installer removes the running version, and
-    /// PawnIO is a kernel driver, so both are left to the user (with the Chocolatey or winget command, or a
-    /// download link). The only requests are GETs to builds.dotnet.microsoft.com, api.github.com and (as a
-    /// fallback) github.com with a "OmenFanPlus/version" User-Agent. The app itself has no release feed; it is
-    /// updated by re-running install.ps1.
+    /// Checks whether the .NET runtime or PawnIO has a newer release (2 minutes after the app starts, then every
+    /// 24 hours, unless turned off in the tray menu) and tells the user, with the Chocolatey or winget command
+    /// and the download link. With "Install updates automatically" on, or from the dialog's Install button, the
+    /// app fetches the installer itself: see <see cref="DependencyInstaller"/> for how it is checked and run.
+    /// The checks send only GETs to builds.dotnet.microsoft.com, api.github.com and (as a fallback) github.com
+    /// with a "OmenFanPlus/version" User-Agent. The app itself has no release feed; it is updated by re-running
+    /// install.ps1.
     /// </summary>
     internal sealed class UpdateCheck : IDisposable
     {
@@ -23,27 +25,55 @@ namespace OmenFanPlus.Services
         private const string PawnIoLatestApiUrl = "https://api.github.com/repos/namazso/PawnIO.Setup/releases/latest";
         // Redirects to .../releases/tag/<version>; used when the API's hourly limit is used up.
         private const string PawnIoLatestPageUrl = "https://github.com/namazso/PawnIO.Setup/releases/latest";
+        private const string PawnIoDownloadPattern = "https://github.com/namazso/PawnIO.Setup/releases/download/{0}/PawnIO_setup.exe";
+        private const string PawnIoDownload = "PawnIO_setup.exe from https://pawnio.eu";
 
         private static readonly HttpClient Http = CreateClient(followRedirects: true);
         private static readonly HttpClient HttpNoRedirect = CreateClient(followRedirects: false);
         private readonly System.Threading.Timer _timer;
+        private readonly DependencyInstaller _installer = new();
         private readonly HashSet<string> _notified = new();
         private int _running;
+        private int _installing;
 
         /// <summary>Raised (on a thread-pool thread) with a short message when something can be updated.</summary>
         public event EventHandler<string>? UpdateAvailable;
 
+        /// <summary>Raised (on a thread-pool thread) while an install is prepared, and when it fails.</summary>
+        public event EventHandler<string>? InstallProgress;
+
         public UpdateCheck()
         {
+            _installer.Progress += (sender, message) => InstallProgress?.Invoke(this, message);
             _timer = new System.Threading.Timer(_ => RunScheduled(), null, TimeSpan.FromMinutes(2), TimeSpan.FromHours(24));
         }
+
+        public bool IsInstalling => _installing == 1;
 
         private async void RunScheduled()
         {
             try
             {
-                if (Settings.Default.CheckForUpdates)
-                    await RunAsync(notify: true);
+                if (!Settings.Default.CheckForUpdates)
+                    return;
+
+                var install = Settings.Default.AutoInstallUpdates && DependencyInstaller.CanInstall;
+                var report = await RunAsync(notify: !install);
+                if (!install || report.Available.Count == 0)
+                    return;
+
+                // A version that was tried in the last 24 hours and is still not installed failed; the app restarts
+                // after every attempt, so without this it would try again 2 minutes later, for ever.
+                var now = DateTime.UtcNow;
+                var due = report.Available.Where(u => UpdateRunner.ShouldAutoInstall(Settings.Default.LastInstallAttempt, u, now)).ToList();
+                foreach (var skipped in report.Available.Except(due))
+                    AppLog.Info($"Update: not retrying {skipped.DisplayName} {skipped.Version} automatically yet (tried in the last 24 h)");
+                if (due.Count == 0)
+                    return;
+
+                var error = await InstallAsync(due);
+                if (error != null)
+                    InstallProgress?.Invoke(this, error + " Right-click the tray icon > Check for updates to try again.");
             }
             catch (Exception ex)
             {
@@ -51,24 +81,25 @@ namespace OmenFanPlus.Services
             }
         }
 
-        /// <summary>Runs the checks and returns a report for the "Check for updates" dialog.</summary>
-        public async Task<string> RunAsync(bool notify)
+        /// <summary>Runs the checks and returns the report for the "Check for updates" dialog.</summary>
+        public async Task<UpdateReport> RunAsync(bool notify)
         {
             if (Interlocked.Exchange(ref _running, 1) == 1)
-                return "A check is already running.";
+                return new UpdateReport("A check is already running.", Array.Empty<AvailableUpdate>());
 
             try
             {
                 var report = new StringBuilder();
+                var available = new List<AvailableUpdate>();
                 report.AppendLine($"OmenFanPlus {Application.ProductVersion}");
                 report.AppendLine("  Update it by pulling the latest code and running install.ps1 again.");
                 report.AppendLine();
 
-                await CheckRuntimeAsync(report, notify);
+                await CheckRuntimeAsync(report, available, notify);
                 report.AppendLine();
-                await CheckPawnIoAsync(report, notify);
+                await CheckPawnIoAsync(report, available, notify);
 
-                return report.ToString();
+                return new UpdateReport(report.ToString(), available);
             }
             finally
             {
@@ -76,7 +107,42 @@ namespace OmenFanPlus.Services
             }
         }
 
-        private async Task CheckRuntimeAsync(StringBuilder report, bool notify)
+        /// <summary>
+        /// Downloads and verifies the updates, then hands them to the run script, which closes the app, installs
+        /// them and starts the app again. Returns null when that is under way, else a message saying what went
+        /// wrong (nothing was installed then).
+        /// </summary>
+        public async Task<string?> InstallAsync(IReadOnlyList<AvailableUpdate> updates)
+        {
+            if (Interlocked.Exchange(ref _installing, 1) == 1)
+                return "An installation is already running.";
+
+            try
+            {
+                AppLog.Info($"Update: installing {string.Join(", ", updates.Select(u => $"{u.DisplayName} {u.Version}"))}");
+                // Noted before anything is downloaded, so a failing download isn't repeated every 2 minutes either.
+                Settings.Default.LastInstallAttempt = UpdateRunner.RecordAttempt(Settings.Default.LastInstallAttempt, updates, DateTime.UtcNow);
+                FanModeController.TrySave();
+                await _installer.StageAndInstallAsync(updates, CancellationToken.None);
+                return null;
+            }
+            catch (UpdateException ex)
+            {
+                AppLog.Warn($"Update: {ex.Message}");
+                return ex.Message;
+            }
+            catch (Exception ex)
+            {
+                AppLog.Error("Update: installing failed", ex);
+                return $"The update couldn't be installed: {ex.Message}";
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _installing, 0);
+            }
+        }
+
+        private async Task CheckRuntimeAsync(StringBuilder report, List<AvailableUpdate> available, bool notify)
         {
             var current = Environment.Version;
             report.AppendLine($".NET runtime {current}");
@@ -94,13 +160,23 @@ namespace OmenFanPlus.Services
                 {
                     var security = NewerReleaseHasSecurityFixes(root, current);
                     report.AppendLine($"  {latest} is available{(security ? " and includes security fixes" : "")}.");
-                    report.AppendLine("  Quit OmenFanPlus first (the installer removes the version it runs on), then:");
+                    var installer = FindRuntimeInstaller(root, latest);
+                    if (installer != null && DependencyInstaller.CanInstall)
+                    {
+                        available.Add(AvailableUpdate.DotNetRuntime(latest, installer.Value.Url, installer.Value.Sha512));
+                        report.AppendLine("  OmenFanPlus can install it (it closes, installs and starts again). By hand:");
+                    }
+                    else
+                    {
+                        if (installer != null)
+                            report.AppendLine($"  {DependencyInstaller.CannotInstallHint}");
+                        report.AppendLine("  Quit OmenFanPlus first (the installer removes the version it runs on), then:");
+                    }
                     AppendInstallOptions(report, "dotnet-10.0-desktopruntime", "Microsoft.DotNet.DesktopRuntime.10",
                         "the Windows x64 \"Desktop Runtime\" from https://dotnet.microsoft.com/download/dotnet/10.0");
-                    report.AppendLine("  and start OmenFanPlus again.");
                     Notify(notify, $"runtime {latest}",
                         $".NET runtime {latest} is available{(security ? " with security fixes" : "")}. " +
-                        "Right-click the tray icon > Check for updates for how to install it.");
+                        "Right-click the tray icon > Check for updates to install it.");
                 }
                 else
                 {
@@ -137,9 +213,43 @@ namespace OmenFanPlus.Services
             return false;
         }
 
-        private async Task CheckPawnIoAsync(StringBuilder report, bool notify)
+        /// <summary>
+        /// The Windows x64 Desktop Runtime installer of the given version from releases.json: its URL and the
+        /// SHA-512 hash Microsoft lists next to it. Null when the metadata doesn't have it.
+        /// </summary>
+        internal static (Uri Url, string Sha512)? FindRuntimeInstaller(JsonElement root, Version version)
         {
-            var installed = ReadInstalledPawnIoVersion();
+            if (!root.TryGetProperty("releases", out var releases) || releases.ValueKind != JsonValueKind.Array)
+                return null;
+
+            foreach (var release in releases.EnumerateArray())
+            {
+                if (!release.TryGetProperty("windowsdesktop", out var desktop) || desktop.ValueKind != JsonValueKind.Object ||
+                    !desktop.TryGetProperty("version", out var versionElement) ||
+                    !Version.TryParse(versionElement.GetString(), out var desktopVersion) || desktopVersion != version ||
+                    !desktop.TryGetProperty("files", out var files) || files.ValueKind != JsonValueKind.Array)
+                    continue;
+
+                foreach (var file in files.EnumerateArray())
+                {
+                    var rid = file.TryGetProperty("rid", out var ridElement) ? ridElement.GetString() : null;
+                    var name = file.TryGetProperty("name", out var nameElement) ? nameElement.GetString() : null;
+                    if (rid != "win-x64" || name == null || !name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    var url = file.TryGetProperty("url", out var urlElement) ? urlElement.GetString() : null;
+                    var hash = file.TryGetProperty("hash", out var hashElement) ? hashElement.GetString()?.Trim() : null;
+                    if (Uri.TryCreate(url, UriKind.Absolute, out var uri) && hash is { Length: 128 } && hash.All(Uri.IsHexDigit))
+                        return (uri, hash);
+                }
+            }
+
+            return null;
+        }
+
+        private async Task CheckPawnIoAsync(StringBuilder report, List<AvailableUpdate> available, bool notify)
+        {
+            var installed = UpdateRunner.ReadInstalledPawnIoVersion();
             report.AppendLine(installed == null ? "PawnIO: not installed (optional)" : $"PawnIO {installed}");
             if (installed == null)
             {
@@ -155,28 +265,43 @@ namespace OmenFanPlus.Services
 
             try
             {
-                var latest = await GetLatestPawnIoVersionAsync();
+                var latest = await GetLatestPawnIoReleaseAsync();
                 if (latest == null)
                 {
                     report.AppendLine("  Couldn't read the latest version.");
                     return;
                 }
 
-                if (latest > installed)
+                if (latest.Value.Version > installed)
                 {
-                    // The app keeps the PawnIO device open, and the driver can't be replaced while it is in use.
-                    report.AppendLine($"  {latest} is available. Quit OmenFanPlus (and other programs that use PawnIO, such as");
-                    report.AppendLine("  FanControl or LibreHardwareMonitor), then:");
+                    report.AppendLine($"  {latest.Value.Version} is available.");
+                    if (latest.Value.Sha256 == null)
+                    {
+                        report.AppendLine("  GitHub's API limit is reached right now, so the installer's hash can't be read and OmenFanPlus");
+                        report.AppendLine("  won't install it until a later check. By hand, quit OmenFanPlus, then:");
+                    }
+                    else if (!DependencyInstaller.CanInstall)
+                    {
+                        report.AppendLine($"  {DependencyInstaller.CannotInstallHint}");
+                        report.AppendLine("  Quit OmenFanPlus, then:");
+                    }
+                    else
+                    {
+                        available.Add(AvailableUpdate.PawnIo(latest.Value.Version, latest.Value.Url, latest.Value.Sha256));
+                        // The app keeps the PawnIO device open, and the driver can't be replaced while it is in use.
+                        report.AppendLine("  OmenFanPlus can install it (it closes, installs and starts again; close FanControl or");
+                        report.AppendLine("  LibreHardwareMonitor first if they run). By hand, quit OmenFanPlus, then:");
+                    }
                     AppendInstallOptions(report, "pawnio", "namazso.PawnIO", PawnIoDownload);
                     report.AppendLine("  and start OmenFanPlus again. Restart Windows if the installer asks for it.");
-                    Notify(notify, $"pawnio {latest}",
-                        $"PawnIO {latest} is available. Right-click the tray icon > Check for updates for how to install it.");
+                    Notify(notify, $"pawnio {latest.Value.Version}",
+                        $"PawnIO {latest.Value.Version} is available. Right-click the tray icon > Check for updates to install it.");
                 }
                 else
                 {
                     report.AppendLine("  Up to date.");
                 }
-                AppLog.Info($"Update check: PawnIO {installed}, latest {latest}");
+                AppLog.Info($"Update check: PawnIO {installed}, latest {latest.Value.Version}");
             }
             catch (Exception ex)
             {
@@ -185,29 +310,55 @@ namespace OmenFanPlus.Services
             }
         }
 
-        private static async Task<Version?> GetLatestPawnIoVersionAsync()
+        private static async Task<(Version Version, Uri Url, string? Sha256)?> GetLatestPawnIoReleaseAsync()
         {
-            string? tag;
-            using (var response = await Http.GetAsync(PawnIoLatestApiUrl))
+            using var response = await Http.GetAsync(PawnIoLatestApiUrl);
+            if (response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests)
             {
-                if (response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests)
-                {
-                    // Unauthenticated API calls are limited to 60 an hour per IP address; the release page isn't.
-                    using var page = await HttpNoRedirect.GetAsync(PawnIoLatestPageUrl);
-                    tag = page.Headers.Location?.OriginalString.TrimEnd('/').Split('/').LastOrDefault();
-                }
-                else
-                {
-                    response.EnsureSuccessStatusCode();
-                    using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-                    tag = json.RootElement.GetProperty("tag_name").GetString();
-                }
+                // Unauthenticated API calls are limited to 60 an hour per IP address; the release page isn't. It
+                // only gives the tag, so the installer's hash stays unknown and the release is reported, not installed.
+                using var page = await HttpNoRedirect.GetAsync(PawnIoLatestPageUrl);
+                var tag = page.Headers.Location?.OriginalString.TrimEnd('/').Split('/').LastOrDefault();
+                if (!Version.TryParse(tag?.TrimStart('v', 'V'), out var tagVersion))
+                    return null;
+                return (tagVersion, new Uri(string.Format(PawnIoDownloadPattern, Uri.EscapeDataString(tag!))), null);
             }
 
-            return Version.TryParse(tag?.TrimStart('v', 'V'), out var version) ? version : null;
+            response.EnsureSuccessStatusCode();
+            using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            var release = json.RootElement;
+            if (!Version.TryParse(release.GetProperty("tag_name").GetString()?.TrimStart('v', 'V'), out var version))
+                return null;
+
+            var asset = FindPawnIoAsset(release);
+            if (asset == null)
+                return null;
+            return (version, asset.Value.Url, asset.Value.Sha256);
         }
 
-        private const string PawnIoDownload = "PawnIO_setup.exe from https://pawnio.eu";
+        /// <summary>PawnIO_setup.exe in a GitHub release: its URL and SHA-256 (null when the API gives no digest).</summary>
+        internal static (Uri Url, string? Sha256)? FindPawnIoAsset(JsonElement release)
+        {
+            if (!release.TryGetProperty("assets", out var assets) || assets.ValueKind != JsonValueKind.Array)
+                return null;
+
+            foreach (var asset in assets.EnumerateArray())
+            {
+                var name = asset.TryGetProperty("name", out var nameElement) ? nameElement.GetString() : null;
+                if (!string.Equals(name, "PawnIO_setup.exe", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var url = asset.TryGetProperty("browser_download_url", out var urlElement) ? urlElement.GetString() : null;
+                if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+                    return null;
+
+                var digest = asset.TryGetProperty("digest", out var digestElement) ? digestElement.GetString() : null;
+                var parsed = InstallerVerifier.ParseDigest(digest);
+                return (uri, parsed is { Algorithm: "SHA256" } p ? p.Hex : null);
+            }
+
+            return null;
+        }
 
         /// <summary>
         /// The command for the package manager this PC has (Chocolatey, else winget), plus the download link,
@@ -215,13 +366,15 @@ namespace OmenFanPlus.Services
         /// </summary>
         private static void AppendInstallOptions(StringBuilder report, string chocoPackage, string wingetId, string download)
         {
-            if (HasChocolatey())
+            var choco = HasChocolatey();
+            if (choco)
                 report.AppendLine($"    choco upgrade {chocoPackage} -y");
             else if (HasWinget())
                 report.AppendLine($"    winget install --id {wingetId} -e");
-            report.AppendLine($"    {(HasChocolatey() || HasWinget() ? "or download" : "download")} {download}");
+            report.AppendLine($"    {(choco || HasWinget() ? "or download" : "download")} {download}");
         }
 
+        // Only decides which command to print; nothing is ever run from here.
         private static bool HasChocolatey()
         {
             var root = Environment.GetEnvironmentVariable("ChocolateyInstall");
@@ -232,21 +385,6 @@ namespace OmenFanPlus.Services
 
         private static bool HasWinget() => File.Exists(Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "WindowsApps", "winget.exe"));
-
-        // Read fresh each time: LibreHardwareMonitor only checks once, when the app starts.
-        private static Version? ReadInstalledPawnIoVersion()
-        {
-            try
-            {
-                using var hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
-                using var key = hklm.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PawnIO");
-                return Version.TryParse(key?.GetValue("DisplayVersion") as string, out var version) ? version : null;
-            }
-            catch (Exception)
-            {
-                return null;
-            }
-        }
 
         private void Notify(bool notify, string key, string message)
         {

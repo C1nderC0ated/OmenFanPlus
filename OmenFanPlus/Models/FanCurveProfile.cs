@@ -109,10 +109,11 @@ namespace OmenFanPlus.Models
         }
 
         /// <summary>Writes the curves; the file is replaced in one step so a crash can't leave it half written.</summary>
-        public void Save()
+        public void Save() => Save(StorePath);
+
+        internal void Save(string path)
         {
             var options = new JsonSerializerOptions { WriteIndented = true };
-            var path = StorePath;
             var temp = path + ".tmp";
             File.WriteAllText(temp, JsonSerializer.Serialize(this, options));
             File.Move(temp, path, overwrite: true);
@@ -120,16 +121,22 @@ namespace OmenFanPlus.Models
 
         public static FanCurveProfile Load()
         {
+            var path = StorePath;
+            if (!File.Exists(path))
+            {
+                // A curve saved before the rename to OmenFanPlus.
+                path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "OmenHubLighterPlus", "fancurve.json");
+            }
+            return Load(path);
+        }
+
+        /// <summary>Reads a curve file; anything unreadable or out of range falls back to the default curve.</summary>
+        internal static FanCurveProfile Load(string path)
+        {
             try
             {
-                var path = StorePath;
-                if (!File.Exists(path))
-                {
-                    // A curve saved before the rename to OmenFanPlus.
-                    path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                        "OmenHubLighterPlus", "fancurve.json");
-                    if (!File.Exists(path)) return CreateDefault();
-                }
+                if (!File.Exists(path)) return CreateDefault();
                 var json = File.ReadAllText(path);
                 var profile = JsonSerializer.Deserialize<FanCurveProfile>(json) ?? CreateDefault();
                 profile.CpuCurve = Validated(profile.CpuCurve);

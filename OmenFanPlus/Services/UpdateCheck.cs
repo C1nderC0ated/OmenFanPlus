@@ -116,7 +116,7 @@ namespace OmenFanPlus.Services
         }
 
         // The latest release alone doesn't say whether a skipped one in between was a security release.
-        private static bool NewerReleaseHasSecurityFixes(JsonElement root, Version current)
+        internal static bool NewerReleaseHasSecurityFixes(JsonElement root, Version current)
         {
             if (!root.TryGetProperty("releases", out var releases) || releases.ValueKind != JsonValueKind.Array)
                 return false;

@@ -88,29 +88,34 @@ namespace Hp.Omen.OmenCommonLib
                     OMENEventSource.Log.Info("Fan table (0x2F) raw: " + BitConverter.ToString(table.Take(48).ToArray()));
             }
 
-            return new OmenCapabilities
-            {
-                BiosAvailable = biosAvailable,
-                // 0x11 only feeds the fan-speed label, so it doesn't hold back re-applying the saved mode.
-                ProbeComplete = IsDefinite(fanLevel) && IsDefinite(maxFan) && IsDefinite(designData),
-                FanLevelSupported = fanLevel == 0,
-                MaxFanSupported = maxFan == 0,
-                SystemDesignDataSupported = designData == 0,
-                FanRpmSupported = fanRpm == 0,
-                FanLevelReturnCode = fanLevel,
-                MaxFanReturnCode = maxFan,
-                SystemDesignDataReturnCode = designData,
-                FanRpmReturnCode = fanRpm,
-                ThermalPolicy = biosAvailable ? client.GetThermalPolicyVersion() : ThermalPolicyVersion.V0,
-                SystemId = OmenSMBiosHelper.SystemID,
-            };
+            // 0x11 only feeds the fan-speed label, so it doesn't hold back re-applying the saved mode.
+            return FromReturnCodes(fanLevel, maxFan, designData, fanRpm, OmenSMBiosHelper.SystemID,
+                biosAvailable ? client.GetThermalPolicyVersion() : ThermalPolicyVersion.V0);
         }
 
         /// <summary>What the app assumes while the BIOS hasn't answered at all (probe failed before it could run).</summary>
-        public static OmenCapabilities Unavailable() => new()
+        public static OmenCapabilities Unavailable() =>
+            FromReturnCodes(-1, -1, -1, -1, OmenSMBiosHelper.SystemID, ThermalPolicyVersion.V0);
+
+        /// <summary>
+        /// Builds the capabilities from BIOS answers that were obtained elsewhere (the same rules Probe uses).
+        /// Return codes: 0 = works, > 0 = the BIOS's error code, -1 = WMI didn't answer.
+        /// </summary>
+        public static OmenCapabilities FromReturnCodes(int fanLevel, int maxFan, int designData, int fanRpm,
+            string systemId, ThermalPolicyVersion thermalPolicy) => new()
         {
-            FanLevelReturnCode = -1, MaxFanReturnCode = -1, SystemDesignDataReturnCode = -1, FanRpmReturnCode = -1,
-            SystemId = OmenSMBiosHelper.SystemID,
+            BiosAvailable = fanLevel >= 0 || maxFan >= 0 || designData >= 0 || fanRpm >= 0,
+            ProbeComplete = IsDefinite(fanLevel) && IsDefinite(maxFan) && IsDefinite(designData),
+            FanLevelSupported = fanLevel == 0,
+            MaxFanSupported = maxFan == 0,
+            SystemDesignDataSupported = designData == 0,
+            FanRpmSupported = fanRpm == 0,
+            FanLevelReturnCode = fanLevel,
+            MaxFanReturnCode = maxFan,
+            SystemDesignDataReturnCode = designData,
+            FanRpmReturnCode = fanRpm,
+            ThermalPolicy = thermalPolicy,
+            SystemId = systemId,
         };
 
         // -1 = WMI itself failed, 2 = wrong signature: ask again later. Anything else is the BIOS's answer.

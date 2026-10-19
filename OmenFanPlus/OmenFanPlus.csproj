@@ -21,6 +21,10 @@
 	</PropertyGroup>
 
 	<ItemGroup>
+	  <InternalsVisibleTo Include="OmenFanPlus.Tests" />
+	</ItemGroup>
+
+	<ItemGroup>
 	  <!-- Microsoft.Extensions.Options removed: nothing in the solution uses it. -->
 	  <PackageReference Include="TaskScheduler" Version="2.12.2" />
 	  <!-- ExcludeAssets replaces the hard-coded C:\Users\joery\.nuget\... <Content Remove> for the package logo. -->

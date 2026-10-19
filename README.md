@@ -102,7 +102,7 @@ But if you want, you can easily port what you need, because the fundamental chor
 
 I was able to find most of what I need by decompiling `HP.Omen.Background.FanControlBg.dll` using [dotPeek](https://www.jetbrains.com/decompiler/) and then going to `HP.Omen.Core.Common.OmenHsaClient`.
 
-Build with `dotnet build OmenFanPlus.sln -c Release`. `tests\Test-InstallScript.ps1` checks `install.ps1` without running it: its bytes, that it parses, that the install-folder guard refuses the wrong folders, and that the guard runs before anything else.
+Build with `dotnet build OmenFanPlus.sln -c Release`. `dotnet test OmenFanPlus.sln -c Release` runs the xUnit tests in `tests\OmenFanPlus.Tests` (curve maths, capability decisions, update-check logic, the install-path rule; nothing in them touches the BIOS). `tests\Test-InstallScript.ps1` checks `install.ps1` without running it: its bytes, that it parses, that the install-folder guard refuses the wrong folders, and that the guard runs before anything else.
 
 Projects: `OmenFanPlus` (the app), `OmenFanPlus.Hp` (HP BIOS WMI access, reverse-engineered from OMEN Gaming Hub) and `OmenFanPlus.Lib` (temperatures). The original repository's OmenDriverPatcher (a C++ tool that patched HP's services) and EventWatcher console tool were removed in 2.0; they are still in the git history on `main`.
 

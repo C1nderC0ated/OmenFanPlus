@@ -22,8 +22,9 @@ namespace OmenFanPlus.Services
         public static readonly string[] AllowedHosts =
             { "builds.dotnet.microsoft.com", "download.visualstudio.microsoft.com", "github.com" };
 
-        /// <summary>On github.com only this repository's release files.</summary>
-        public const string GitHubPathPrefix = "/namazso/PawnIO.Setup/releases/download/";
+        /// <summary>On github.com only these repositories' release files: PawnIO's, and OmenFanPlus's own.</summary>
+        public static readonly string[] GitHubPathPrefixes =
+            { "/namazso/PawnIO.Setup/releases/download/", $"/{UpdateCatalog.AppRepository}/releases/download/" };
 
         /// <summary>Where a download may end after redirects (GitHub serves release files from its CDN).</summary>
         public static readonly string[] AllowedFinalHosts =
@@ -43,7 +44,7 @@ namespace OmenFanPlus.Services
                 !AllowedHosts.Contains(url.Host, StringComparer.OrdinalIgnoreCase))
                 return false;
             return !string.Equals(url.Host, "github.com", StringComparison.OrdinalIgnoreCase) ||
-                   url.AbsolutePath.StartsWith(GitHubPathPrefix, StringComparison.Ordinal);
+                   GitHubPathPrefixes.Any(prefix => url.AbsolutePath.StartsWith(prefix, StringComparison.Ordinal));
         }
 
         public static bool IsAllowedFinalHost(Uri url) =>
@@ -68,6 +69,21 @@ namespace OmenFanPlus.Services
             "Install by hand with the commands in the update dialog.";
 
         /// <summary>
+        /// install.ps1's rule for a folder it may mirror into, and so the rule for a self-update, which mirrors the
+        /// same way: the exe is OmenFanPlus.exe in a folder named OmenFanPlus. Anything else (a zip unpacked into a
+        /// shared tools folder, say) would lose every other file in that folder.
+        /// </summary>
+        public static bool IsOwnFolder(string exePath) =>
+            string.Equals(Path.GetFileName(exePath), "OmenFanPlus.exe", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(Path.GetFileName(Path.GetDirectoryName(exePath) ?? ""), "OmenFanPlus", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>Whether this copy may replace its own files: <see cref="CanInstall"/> and in its own folder.</summary>
+        public static bool CanSelfUpdate => CanInstall && IsOwnFolder(Application.ExecutablePath);
+
+        public const string CannotSelfUpdateHint =
+            "This copy doesn't run as OmenFanPlus.exe in a folder named OmenFanPlus, so it won't replace its files itself.";
+
+        /// <summary>
         /// Downloads and verifies every update into a fresh administrators-only folder, then starts the run
         /// script, which asks this app to quit. Throws <see cref="UpdateException"/> with a message for the user
         /// when something is off; nothing has been installed in that case.
@@ -78,6 +94,8 @@ namespace OmenFanPlus.Services
                 throw new UpdateException("Nothing to install.");
             if (!CanInstall)
                 throw new UpdateException(CannotInstallHint);
+            if (updates.Any(u => u.Component == UpdateComponent.App) && !IsOwnFolder(Application.ExecutablePath))
+                throw new UpdateException(CannotSelfUpdateHint);
 
             var folder = CreateStagingFolder(UpdateRunner.StagingRoot);
             try
@@ -174,16 +192,17 @@ namespace OmenFanPlus.Services
             if (problem != null)
                 throw new UpdateException($"{update.DisplayName}: {problem} The file was deleted and nothing was installed.");
 
-            AppLog.Info($"Update: {update.FileName} verified ({update.HashAlgorithm} matches, signed by {update.SignerOrganization})");
+            AppLog.Info($"Update: {update.FileName} verified ({update.HashAlgorithm} matches" +
+                        (update.SignerOrganization == null ? ")" : $", signed by {update.SignerOrganization})"));
             return path;
         }
 
         /// <summary>
-        /// Null when the file's hash matches and it carries a valid signature from the expected organization;
-        /// otherwise what is wrong. The file is deleted when it fails.
+        /// Null when the file's hash matches and, where a signer is expected, it carries a valid signature from
+        /// that organization; otherwise what is wrong. The file is deleted when it fails.
         /// </summary>
         public static async Task<string?> VerifyAsync(string path, string expectedHash, string hashAlgorithm,
-            string signerOrganization, CancellationToken ct)
+            string? signerOrganization, CancellationToken ct)
         {
             string? problem = null;
             try
@@ -194,7 +213,7 @@ namespace OmenFanPlus.Services
                 if (!InstallerVerifier.HashMatches(expectedHash, actual))
                     problem = $"its {hashAlgorithm} hash doesn't match the publisher's ({actual[..16]}... vs {expectedHash.Trim()[..Math.Min(16, expectedHash.Trim().Length)]}...).";
 
-                if (problem == null)
+                if (problem == null && signerOrganization != null)
                 {
                     var signature = InstallerVerifier.VerifySignature(path, signerOrganization);
                     if (!signature.Valid)

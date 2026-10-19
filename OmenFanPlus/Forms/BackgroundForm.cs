@@ -163,8 +163,8 @@ namespace OmenFanPlus.Forms
             var answer = MessageBox.Show(
                 report.Text + Environment.NewLine +
                 $"Install {names} now?" + Environment.NewLine + Environment.NewLine +
-                "OmenFanPlus downloads the installer from the publisher, checks its hash and signature, then closes, " +
-                "installs it and starts again. Nothing else is touched, and Windows is not restarted.",
+                "OmenFanPlus downloads it from the publisher, checks it against the published hash (and the signature, " +
+                "for installers), then closes, installs it and starts again. Nothing else is touched, and Windows is not restarted.",
                 "OmenFanPlus updates", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
             if (answer != DialogResult.Yes)
                 return;

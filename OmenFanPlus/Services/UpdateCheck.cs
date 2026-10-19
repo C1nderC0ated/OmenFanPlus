@@ -15,9 +15,9 @@ namespace OmenFanPlus.Services
     /// 24 hours, unless turned off in the tray menu) and tells the user, with the Chocolatey or winget command
     /// and the download link. With "Install updates automatically" on, or from the dialog's Install button, the
     /// app fetches the installer itself: see <see cref="DependencyInstaller"/> for how it is checked and run.
-    /// The checks send only GETs to builds.dotnet.microsoft.com, api.github.com and (as a fallback) github.com
-    /// with a "OmenFanPlus/version" User-Agent. The app itself has no release feed; it is updated by re-running
-    /// install.ps1.
+    /// OmenFanPlus itself is checked against its GitHub releases the same way. The checks send only GETs to
+    /// builds.dotnet.microsoft.com, api.github.com and (as a fallback) github.com with a "OmenFanPlus/version"
+    /// User-Agent.
     /// </summary>
     internal sealed class UpdateCheck : IDisposable
     {
@@ -27,6 +27,8 @@ namespace OmenFanPlus.Services
         private const string PawnIoLatestPageUrl = "https://github.com/namazso/PawnIO.Setup/releases/latest";
         private const string PawnIoDownloadPattern = "https://github.com/namazso/PawnIO.Setup/releases/download/{0}/PawnIO_setup.exe";
         private const string PawnIoDownload = "PawnIO_setup.exe from https://pawnio.eu";
+        private static readonly string AppLatestApiUrl = $"https://api.github.com/repos/{UpdateCatalog.AppRepository}/releases/latest";
+        private static readonly string AppLatestPageUrl = $"https://github.com/{UpdateCatalog.AppRepository}/releases/latest";
 
         private static readonly HttpClient Http = CreateClient(followRedirects: true);
         private static readonly HttpClient HttpNoRedirect = CreateClient(followRedirects: false);
@@ -91,10 +93,8 @@ namespace OmenFanPlus.Services
             {
                 var report = new StringBuilder();
                 var available = new List<AvailableUpdate>();
-                report.AppendLine($"OmenFanPlus {Application.ProductVersion}");
-                report.AppendLine("  Update it by pulling the latest code and running install.ps1 again.");
+                await CheckAppAsync(report, available, notify);
                 report.AppendLine();
-
                 await CheckRuntimeAsync(report, available, notify);
                 report.AppendLine();
                 await CheckPawnIoAsync(report, available, notify);
@@ -357,6 +357,165 @@ namespace OmenFanPlus.Services
                 return (uri, parsed is { Algorithm: "SHA256" } p ? p.Hex : null);
             }
 
+            return null;
+        }
+
+        /// <summary>A release of the app on GitHub: the win-x64 zip, GitHub's digest of it, and the SHA256SUMS.txt beside it.</summary>
+        internal sealed record AppRelease(Version Version, Uri Zip, string? Sha256, Uri? Sums);
+
+        private async Task CheckAppAsync(StringBuilder report, List<AvailableUpdate> available, bool notify)
+        {
+            var current = Version.TryParse(Application.ProductVersion, out var running) ? running : new Version(0, 0);
+            report.AppendLine($"OmenFanPlus {Application.ProductVersion}");
+            try
+            {
+                using var response = await Http.GetAsync(AppLatestApiUrl);
+                if (response.StatusCode == HttpStatusCode.NotFound)
+                {
+                    report.AppendLine("  No release has been published yet. To update, pull the latest code and run install.ps1 again.");
+                    return;
+                }
+
+                if (response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests)
+                {
+                    // Rate-limited: the release page's redirect gives the tag, but no hash, so only report.
+                    using var page = await HttpNoRedirect.GetAsync(AppLatestPageUrl);
+                    var tag = page.Headers.Location?.OriginalString.TrimEnd('/').Split('/').LastOrDefault();
+                    if (!Version.TryParse(tag?.TrimStart('v', 'V'), out var tagVersion))
+                        report.AppendLine("  Couldn't read the latest release.");
+                    else if (tagVersion <= current)
+                        report.AppendLine("  Up to date.");
+                    else
+                    {
+                        report.AppendLine($"  {tagVersion} is available. GitHub's API limit is reached right now, so the package's hash can't be");
+                        report.AppendLine("  read and OmenFanPlus won't install it until a later check. By hand:");
+                        AppendAppManualOptions(report);
+                        Notify(notify, $"app {tagVersion}", $"OmenFanPlus {tagVersion} is available. Right-click the tray icon > Check for updates for how to install it.");
+                    }
+                    return;
+                }
+
+                response.EnsureSuccessStatusCode();
+                using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                var release = FindAppRelease(json.RootElement);
+                if (release == null)
+                {
+                    report.AppendLine("  Couldn't read the latest release.");
+                    return;
+                }
+                if (release.Version <= current)
+                {
+                    report.AppendLine("  Up to date.");
+                    AppLog.Info($"Update check: OmenFanPlus {current}, latest {release.Version}");
+                    return;
+                }
+
+                report.AppendLine($"  {release.Version} is available.");
+                var hash = await ConfirmedAppHashAsync(release, report);
+                if (hash != null && DependencyInstaller.CanSelfUpdate)
+                {
+                    available.Add(AvailableUpdate.App(release.Version, release.Zip, hash));
+                    report.AppendLine("  OmenFanPlus can install it (it closes, replaces its files and starts again; settings stay). By hand:");
+                }
+                else if (hash != null)
+                {
+                    report.AppendLine($"  {(DependencyInstaller.CanInstall ? DependencyInstaller.CannotSelfUpdateHint : DependencyInstaller.CannotInstallHint)}");
+                }
+                AppendAppManualOptions(report);
+                Notify(notify, $"app {release.Version}",
+                    $"OmenFanPlus {release.Version} is available. Right-click the tray icon > Check for updates to install it.");
+                AppLog.Info($"Update check: OmenFanPlus {current}, latest {release.Version}");
+            }
+            catch (Exception ex)
+            {
+                report.AppendLine($"  Couldn't check: {ex.Message}");
+                AppLog.Warn($"Update check for OmenFanPlus failed: {ex.Message}");
+            }
+        }
+
+        // GitHub's digest for the zip must agree with the SHA256SUMS.txt the release workflow wrote. Both come from
+        // the same release, so this catches a broken upload rather than an attacker: the app has no code-signing
+        // certificate, so its identity rests on TLS to GitHub plus these hashes.
+        private static async Task<string?> ConfirmedAppHashAsync(AppRelease release, StringBuilder report)
+        {
+            if (release.Sha256 == null)
+            {
+                report.AppendLine("  GitHub lists no digest for the package, so OmenFanPlus won't install it.");
+                return null;
+            }
+            if (release.Sums == null || !DependencyInstaller.IsAllowedSource(release.Sums))
+            {
+                report.AppendLine("  The release has no SHA256SUMS.txt, so OmenFanPlus won't install it.");
+                return null;
+            }
+
+            var listed = ParseSha256Sums(await Http.GetStringAsync(release.Sums), Path.GetFileName(release.Zip.LocalPath));
+            if (!string.Equals(listed, release.Sha256, StringComparison.OrdinalIgnoreCase))
+            {
+                report.AppendLine("  The release's SHA256SUMS.txt doesn't match GitHub's digest for the package, so OmenFanPlus won't install it.");
+                AppLog.Warn($"Update check: SHA256SUMS.txt ({listed ?? "no entry"}) and GitHub's digest ({release.Sha256}) disagree for {release.Zip}");
+                return null;
+            }
+            return release.Sha256;
+        }
+
+        private static void AppendAppManualOptions(StringBuilder report)
+        {
+            report.AppendLine("    git pull in the source folder, then install.ps1;");
+            report.AppendLine($"    or the zip from https://github.com/{UpdateCatalog.AppRepository}/releases/latest, unpacked over");
+            report.AppendLine(@"    C:\Program Files\OmenFanPlus after quitting the app");
+        }
+
+        /// <summary>
+        /// The win-x64 zip of a GitHub release of the app (name OmenFanPlus-&lt;version&gt;-win-x64.zip), GitHub's
+        /// digest for it and the SHA256SUMS.txt asset. Null when the release has no such zip.
+        /// </summary>
+        internal static AppRelease? FindAppRelease(JsonElement release)
+        {
+            if (!release.TryGetProperty("tag_name", out var tagElement) ||
+                !Version.TryParse(tagElement.GetString()?.TrimStart('v', 'V'), out var version) ||
+                !release.TryGetProperty("assets", out var assets) || assets.ValueKind != JsonValueKind.Array)
+                return null;
+
+            Uri? zip = null;
+            string? sha256 = null;
+            Uri? sums = null;
+            foreach (var asset in assets.EnumerateArray())
+            {
+                var name = asset.TryGetProperty("name", out var nameElement) ? nameElement.GetString() : null;
+                var url = asset.TryGetProperty("browser_download_url", out var urlElement) &&
+                          Uri.TryCreate(urlElement.GetString(), UriKind.Absolute, out var parsed) ? parsed : null;
+                if (name == null || url == null)
+                    continue;
+
+                if (name.StartsWith("OmenFanPlus-", StringComparison.OrdinalIgnoreCase) && name.EndsWith("-win-x64.zip", StringComparison.OrdinalIgnoreCase))
+                {
+                    zip = url;
+                    var digest = InstallerVerifier.ParseDigest(asset.TryGetProperty("digest", out var digestElement) ? digestElement.GetString() : null);
+                    sha256 = digest is { Algorithm: "SHA256" } d ? d.Hex : null;
+                }
+                else if (string.Equals(name, "SHA256SUMS.txt", StringComparison.OrdinalIgnoreCase))
+                {
+                    sums = url;
+                }
+            }
+
+            return zip == null ? null : new AppRelease(version, zip, sha256, sums);
+        }
+
+        /// <summary>The hash listed for a file in a SHA256SUMS.txt ("hex  name" or "hex *name" per line), or null.</summary>
+        internal static string? ParseSha256Sums(string text, string fileName)
+        {
+            foreach (var raw in text.Split('\n'))
+            {
+                var line = raw.Trim();
+                if (line.Length <= 65 || line[64] != ' ')
+                    continue;
+                var hex = line[..64];
+                var name = line[65..].TrimStart(' ', '*').Trim();
+                if (string.Equals(name, fileName, StringComparison.OrdinalIgnoreCase) && hex.All(Uri.IsHexDigit))
+                    return hex;
+            }
             return null;
         }
 

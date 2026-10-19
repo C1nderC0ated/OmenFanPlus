@@ -18,7 +18,7 @@ It continues **OMEN Hub Lighter Plus** ([P2GR/OmenHubLighterPlus](https://github
 - **Honest status.** If the BIOS rejects a command, the popup and the tray tooltip say so, and everything is logged to `%LOCALAPPDATA%\OmenFanPlus\OmenFanPlus.log` (tray menu > *Open log folder*).
 - **Fan speed in RPM** in the popup: from the fan levels, which are in units of 100 RPM (the old "%" label was wrong), or from BIOS query 0x11 on boards without fan levels, such as the OMEN 15-dc1xxx. The curve editor still uses the original level scale.
 - **"Run on startup" fixed.** The task (now `OmenFanPlusStartup`) no longer stops the app when the charger is unplugged, starts it on battery too, runs for your account only, waits 10 s after logon for HP's WMI interface, and runs at normal priority. It only ever starts the copy installed in Program Files; a build run from a `bin` folder never takes it over.
-- **Update checks and installs** (tray menu > *Check for updates...*, automatically 2 minutes after the app starts and then every 24 hours): the app tells you when the .NET runtime or PawnIO has a newer release and how to install it: the Chocolatey or winget command if you have one of them, and always the download link. It can also install them for you, from the dialog's *Install* answer or, with *Install updates automatically* ticked, on its own; see [Dependency updates](#dependency-updates) for exactly what that does. The automatic check sends only GET requests to `builds.dotnet.microsoft.com`, `api.github.com` and, as a fallback, `github.com`, with an `OmenFanPlus/<version>` User-Agent; turn it off with tray menu > *Check for updates automatically*.
+- **Update checks and installs** (tray menu > *Check for updates...*, automatically 2 minutes after the app starts and then every 24 hours): the app tells you when OmenFanPlus itself, the .NET runtime or PawnIO has a newer release and how to install it: the Chocolatey or winget command if you have one of them, and always the download link. It can also install them for you, from the dialog's *Install* answer or, with *Install updates automatically* ticked, on its own; see [Dependency updates](#dependency-updates) for exactly what that does. The automatic check sends only GET requests to `builds.dotnet.microsoft.com`, `api.github.com` and, as a fallback, `github.com`, with an `OmenFanPlus/<version>` User-Agent; turn it off with tray menu > *Check for updates automatically*.
 
 ## What this fork changes
 
@@ -34,9 +34,9 @@ It continues **OMEN Hub Lighter Plus** ([P2GR/OmenHubLighterPlus](https://github
 - New enum values for fan control (Quiet mode wasn't working for me in the original version)
 - Fan speed text
 
-Screenshots from the previous version (OmenFanPlus looks the same with a purple icon, dark menus, the *Comfort* label and an *Auto* button):
+The popup on an OMEN 15-dc1xxx (no manual fan control, so only the thermal modes and Auto), and the fan-curve editor and remap dialog from the previous version:
 
-![Fan control menu](<README Images/fan_control.png>)
+![Fan control popup](<README Images/fan_control.png>)
 ![Fan curve editor](<README Images/fan_curve.png>)
 ![Remap menu](<README Images/remap.png>)
 
@@ -83,7 +83,7 @@ Then, from an elevated PowerShell in that folder:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-`install.ps1` builds the app and asks any running copy to quit (it hands the fans back to the BIOS first). It stops old OmenHubLighterPlus builds and removes the WinRing0 driver service that builds before 2.0 left behind. Then it installs to `C:\Program Files\OmenFanPlus`, replaces the old `OmenHubLighterPlusStartup` task with `OmenFanPlusStartup`, and starts the installed copy. To update the app, `git pull` and run it again. Don't keep using an old OmenHubLighterPlus build from a `bin` folder: builds before 2.0 load WinRing0 again.
+`install.ps1` builds the app and asks any running copy to quit (it hands the fans back to the BIOS first). It stops old OmenHubLighterPlus builds and removes the WinRing0 driver service that builds before 2.0 left behind. Then it installs to `C:\Program Files\OmenFanPlus`, replaces the old `OmenHubLighterPlusStartup` task with `OmenFanPlusStartup`, and starts the installed copy. To update the app later, use tray menu > *Check for updates...* (it offers new [releases](https://github.com/C1nderC0ated/OmenFanPlus/releases)), or `git pull` and run `install.ps1` again. Don't keep using an old OmenHubLighterPlus build from a `bin` folder: builds before 2.0 load WinRing0 again.
 
 **Optional: PawnIO** for the CPU's own temperature sensor (otherwise the ACPI thermal zone is used, which follows the CPU closely on the OMEN 15-dc1xxx). PawnIO is a signed driver that works with Memory Integrity and the vulnerable-driver blocklist turned on; install it with one of the options in the table above and restart OmenFanPlus afterwards. To **update** PawnIO or the .NET runtime later, let the app do it (tray menu > *Check for updates...*, see [Dependency updates](#dependency-updates)) or quit OmenFanPlus first and use the table above: the app keeps the PawnIO driver open (so the driver can't be replaced while it runs), and the runtime installer removes the version the app is running on. Restart Windows if the PawnIO installer asks for it.
 
@@ -131,7 +131,7 @@ This is not a fan curve: the firmware still decides the fan speed inside each pr
 
 ### Dependency updates
 
-The app depends on two things it doesn't ship: the .NET 10 Desktop Runtime and, optionally, the PawnIO driver. When a check finds a newer release, you can let the app install it (the *Install* answer in the *Check for updates...* dialog), or tick *Install updates automatically* so the daily check does it. Off by default. What happens then, in order:
+The app depends on two things it doesn't ship: the .NET 10 Desktop Runtime and, optionally, the PawnIO driver. When a check finds a newer release of either (or of OmenFanPlus itself, see below), you can let the app install it (the *Install* answer in the *Check for updates...* dialog), or tick *Install updates automatically* so the daily check does it. Off by default. What happens then, in order:
 
 1. The installer is downloaded from the publisher only. The download may start at `builds.dotnet.microsoft.com` or `download.visualstudio.microsoft.com` (the runtime) or at `github.com/namazso/PawnIO.Setup/releases/download/…` (PawnIO), and it may end, after redirects, only on those hosts or on GitHub's release CDN (`objects.githubusercontent.com`, `release-assets.githubusercontent.com`). Anything else is refused, and the file goes into a new folder under `C:\Program Files\OmenFanPlus\updates` that only administrators and SYSTEM can write to.
 2. Before anything runs, the file's SHA-512 (runtime) or SHA-256 (PawnIO) hash must match the one the publisher lists in the same release metadata the check read, and Windows must find a valid Authenticode signature on it whose certificate belongs to *Microsoft Corporation* or *namazso*. A file that fails either check is deleted and nothing is installed. A release whose hash can't be read (GitHub's API limit forces the check through the release page, which has no digest) is reported but not installed.
@@ -142,7 +142,9 @@ The app depends on two things it doesn't ship: the .NET 10 Desktop Runtime and, 
 
 If you installed the runtime or PawnIO through Chocolatey or winget, the app still installs the publisher's own installer directly; Chocolatey's or winget's records catch up the next time you run their upgrade command (the package scripts see the version already present).
 
-The app itself has no release feed yet, so it isn't updated this way: pull the latest code and run `install.ps1` again.
+**OmenFanPlus itself** is updated the same way, from this repository's [GitHub releases](https://github.com/C1nderC0ated/OmenFanPlus/releases). The check reads the latest release; the zip's SHA-256 from GitHub's API must agree with the `SHA256SUMS.txt` published beside it (both come from the same release, so this catches a broken upload; the app has no code-signing certificate, so its identity rests on TLS to GitHub plus these hashes). The run script unpacks the verified zip, checks it holds the app, keeps a copy of the installed files, mirrors the new ones over the install folder (the `updates` folder stays), puts the copy back if the mirror fails (robocopy's log goes into the app log), and starts the new version. Because that mirror deletes everything the zip doesn't hold, it only ever runs on a folder named `OmenFanPlus` holding `OmenFanPlus.exe`, the same rule `install.ps1` follows; a copy unpacked somewhere else is told to update by hand. The script runs with only the system PowerShell module folder on its path, so nothing in your Documents folder can stand in for a cmdlet. Settings carry over: a new version starts with a fresh settings folder and imports the previous one. Until a release exists, the check says so, and the update is `git pull` + `install.ps1`.
+
+Cutting a release (maintainers): bump `<Version>` in `OmenFanPlus/OmenFanPlus.csproj`, commit, then `git tag v2.1.0 && git push --tags` with the matching number. The [release workflow](.github/workflows/release.yml) refuses a tag that doesn't match the project version, runs the tests, publishes the app, zips it as `OmenFanPlus-2.1.0-win-x64.zip`, writes `SHA256SUMS.txt` and creates the GitHub release with both. Keeping the version in the project file means a copy built from source carries the release's number and is never "updated" to an older release.
 
 ### Custom curve scale (boards with manual fan control)
 

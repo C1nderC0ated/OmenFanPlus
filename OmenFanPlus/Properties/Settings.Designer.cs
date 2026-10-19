@@ -165,5 +165,53 @@ namespace OmenFanPlus.Properties {
             }
         }
 
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("False")]
+        public bool fanAuto {
+            get {
+                return ((bool)(this["fanAuto"]));
+            }
+            set {
+                this["fanAuto"] = value;
+            }
+        }
+
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("55")]
+        public int AutoComfortBelow {
+            get {
+                return ((int)(this["AutoComfortBelow"]));
+            }
+            set {
+                this["AutoComfortBelow"] = value;
+            }
+        }
+
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("80")]
+        public int AutoPerformanceAbove {
+            get {
+                return ((int)(this["AutoPerformanceAbove"]));
+            }
+            set {
+                this["AutoPerformanceAbove"] = value;
+            }
+        }
+
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("5")]
+        public int AutoHysteresis {
+            get {
+                return ((int)(this["AutoHysteresis"]));
+            }
+            set {
+                this["AutoHysteresis"] = value;
+            }
+        }
+
     }
 }

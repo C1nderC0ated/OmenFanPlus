@@ -24,9 +24,19 @@ namespace OmenFanPlus.Services
         // Off is deliberately not kept alive: letting the BIOS take the fans back is the safe outcome.
         private static readonly TimeSpan MaxKeepAliveInterval = TimeSpan.FromSeconds(90);
 
+        // How often Auto mode looks at the temperatures, and how long it waits after the BIOS refused a switch.
+        private static readonly TimeSpan AutoInterval = TimeSpan.FromSeconds(5);
+        private static readonly TimeSpan AutoRetryDelay = TimeSpan.FromSeconds(60);
+
         private readonly OmenHsaClient _client = new();
         private readonly object _applyLock = new();
         private readonly System.Threading.Timer _maxKeepAlive;
+        private readonly System.Threading.Timer _autoTimer;
+        private AutoProfileSelector? _auto;
+        private PerformanceMode? _autoSent;
+        private DateTime _autoRetryAfterUtc;
+        private volatile bool _autoReload;
+        private int _autoBusy;
         private CancellationTokenSource? _pendingReapply;
         private PowerLineStatus _lastPowerLine = SystemInformation.PowerStatus.PowerLineStatus;
         private int _probeRetry;
@@ -41,6 +51,7 @@ namespace OmenFanPlus.Services
         public FanModeController()
         {
             _maxKeepAlive = new System.Threading.Timer(_ => KeepMaxAlive(), null, Timeout.Infinite, Timeout.Infinite);
+            _autoTimer = new System.Threading.Timer(_ => EvaluateAuto(), null, Timeout.Infinite, Timeout.Infinite);
         }
 
         public OmenCapabilities Capabilities { get; private set; } = null!;
@@ -173,6 +184,7 @@ namespace OmenFanPlus.Services
         public bool ApplyThermalMode(PerformanceMode mode) =>
             Locked(DisplayName(mode), () =>
             {
+                StopAuto();
                 StopMaxKeepAlive();
                 _customActive = false;
                 var releaseRc = ReleaseManualFanControl();
@@ -190,6 +202,7 @@ namespace OmenFanPlus.Services
                 if (!Capabilities.ManualFanControlSupported)
                     return Report("Max", NotSupported);
 
+                StopAuto();
                 _customActive = false;
                 var modeRc = _client.SetFanMode(PerformanceMode.Performance);
                 var rc = _client.SetSwFanControlLevel(100, 100);
@@ -205,6 +218,7 @@ namespace OmenFanPlus.Services
                 if (!Capabilities.ManualFanControlSupported)
                     return Report("Off", NotSupported);
 
+                StopAuto();
                 StopMaxKeepAlive();
                 _customActive = false;
                 // Keep the saved thermal profile (Max may have left Performance in the BIOS).
@@ -223,6 +237,7 @@ namespace OmenFanPlus.Services
                 if (!Capabilities.ManualFanControlSupported)
                     return Report("Custom curve", NotSupported);
 
+                StopAuto();
                 StopMaxKeepAlive();
                 _client.SetFanMode(Settings.Default.PerformanceMode);
                 if (Capabilities.MaxFanSupported)
@@ -235,6 +250,153 @@ namespace OmenFanPlus.Services
                 var rc = _client.SetSwFanControlLevel(Capabilities.FanLevelMax, Capabilities.FanLevelMax);
                 return Report("Custom curve", rc);
             });
+
+        /// <summary>
+        /// Auto mode: the thermal profile follows the temperature (see <see cref="AutoProfileSelector"/>). Works on
+        /// every board that takes the 0x1A mode command, including those without fan-speed control.
+        /// </summary>
+        public bool ApplyAuto() =>
+            Locked("Auto", () =>
+            {
+                StopMaxKeepAlive();
+                _customActive = false;
+                var releaseRc = ReleaseManualFanControl();
+                // Saved even when the BIOS isn't reachable yet, so the startup/resume retry comes back to Auto.
+                SaveMode(auto: true);
+                if (!Capabilities.BiosAvailable)
+                    return Report("Auto", -1, releaseRc);
+
+                _auto = CreateSelector();
+                _autoSent = null;
+                _autoRetryAfterUtc = DateTime.MinValue;
+                Announce("Auto, waiting for a temperature reading", ok: true);
+                _autoTimer.Change(TimeSpan.Zero, AutoInterval);
+                return true;
+            });
+
+        /// <summary>Re-reads the thresholds from the settings; an active Auto mode picks afresh right away.</summary>
+        public void ReloadAutoThresholds()
+        {
+            // Called from the UI thread, so never block on a BIOS call: the next tick picks the thresholds up anyway.
+            if (!Monitor.TryEnter(_applyLock, TimeSpan.FromSeconds(2)))
+            {
+                _autoReload = true;
+                return;
+            }
+            try
+            {
+                if (_auto == null || !Settings.Default.fanAuto)
+                    return;
+                _auto = CreateSelector();
+                _autoRetryAfterUtc = DateTime.MinValue;
+                _autoTimer.Change(TimeSpan.Zero, AutoInterval);
+            }
+            finally
+            {
+                Monitor.Exit(_applyLock);
+            }
+        }
+
+        private AutoProfileSelector CreateSelector()
+        {
+            var s = Settings.Default;
+            if (!AutoProfileSelector.TryValidate(s.AutoComfortBelow, s.AutoPerformanceAbove, s.AutoHysteresis, out var error))
+            {
+                AppLog.Warn($"Auto thresholds are invalid ({error}); using the defaults");
+                return new AutoProfileSelector(55, 80, 5, Capabilities.QuietOrCoolMode);
+            }
+            return new AutoProfileSelector(s.AutoComfortBelow, s.AutoPerformanceAbove, s.AutoHysteresis, Capabilities.QuietOrCoolMode);
+        }
+
+        // Caller holds _applyLock.
+        private void StopAuto()
+        {
+            _autoTimer.Change(Timeout.Infinite, Timeout.Infinite);
+            _auto = null;
+            _autoSent = null;
+        }
+
+        // Timer callback: one reading at a time, never while another BIOS operation runs.
+        private void EvaluateAuto()
+        {
+            if (Interlocked.Exchange(ref _autoBusy, 1) == 1)
+                return;
+            try
+            {
+                var reading = Lib.TemperatureService.Read(Lib.TemperatureService.GpuIntervalBackground);
+                if (reading.Cpu is null && reading.Gpu is null)
+                {
+                    // Nothing to steer by: say so once, and keep whatever profile was set last.
+                    if (_autoSent == null && !Status.StartsWith("Auto: no temperature", StringComparison.Ordinal))
+                        Announce("Auto: no temperature reading (check PawnIO); profile unchanged", ok: false);
+                    return;
+                }
+                var hottest = Math.Max(reading.Cpu ?? float.MinValue, reading.Gpu ?? float.MinValue);
+                var onBattery = SystemInformation.PowerStatus.PowerLineStatus == PowerLineStatus.Offline;
+
+                if (!Monitor.TryEnter(_applyLock, LockTimeout))
+                    return;
+                try
+                {
+                    if (_shuttingDown || _auto == null || !Settings.Default.fanAuto)
+                        return;
+
+                    if (_autoReload)
+                    {
+                        _autoReload = false;
+                        _auto = CreateSelector();
+                        _autoRetryAfterUtc = DateTime.MinValue;
+                    }
+
+                    var now = DateTime.UtcNow;
+                    var wanted = _auto.Next(hottest, onBattery, now);
+                    if (wanted == _autoSent || now < _autoRetryAfterUtc)
+                        return;
+
+                    var rc = _client.SetFanMode(wanted);
+                    var battery = onBattery && wanted != PerformanceMode.Performance && hottest >= _auto.PerformanceAbove
+                        ? ", on battery" : "";
+                    if (Report($"Auto: {DisplayName(wanted)} at {hottest:0} °C{battery}", rc))
+                    {
+                        _autoSent = wanted;
+                        _autoRetryAfterUtc = DateTime.MinValue;
+                    }
+                    else if (rc == NotSupported)
+                    {
+                        // The mode command itself doesn't work here (unknown thermal policy): Auto can't do anything.
+                        StopAuto();
+                        SaveMode();
+                    }
+                    else
+                    {
+                        // A refused or failed switch is retried, but not every tick.
+                        _autoRetryAfterUtc = now + AutoRetryDelay;
+                    }
+                }
+                finally
+                {
+                    Monitor.Exit(_applyLock);
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLog.Error("Auto mode failed to pick a profile", ex);
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _autoBusy, 0);
+            }
+        }
+
+        // A status line that isn't the result of a BIOS call.
+        private void Announce(string status, bool ok)
+        {
+            LastResultOk = ok;
+            Status = status;
+            if (ok) AppLog.Info(status);
+            else AppLog.Warn(status);
+            StatusChanged?.Invoke(this, EventArgs.Empty);
+        }
 
         /// <summary>
         /// Sets the fans for the custom curve, in curve percent (0 = stopped, 1-100 = slowest to fastest).
@@ -346,7 +508,9 @@ namespace OmenFanPlus.Services
             var s = Settings.Default;
             AppLog.Info($"Re-applying saved mode ({reason})");
 
-            if (Capabilities.ManualFanControlSupported && s.fanMax)
+            if (s.fanAuto)
+                ApplyAuto();
+            else if (Capabilities.ManualFanControlSupported && s.fanMax)
                 ApplyMax();
             else if (Capabilities.ManualFanControlSupported && s.fanCustom)
                 ApplyCustom();
@@ -379,6 +543,7 @@ namespace OmenFanPlus.Services
             try
             {
                 _shuttingDown = true;
+                _autoTimer.Change(Timeout.Infinite, Timeout.Infinite);
                 var s = Settings.Default;
                 var manualActive = _customActive || s.fanOff || s.fanMax;
                 _customActive = false;
@@ -389,6 +554,12 @@ namespace OmenFanPlus.Services
                     // Same sequence as picking a thermal mode: release the fans, then set the mode.
                     var modeRc = _client.SetFanMode(s.PerformanceMode);
                     AppLog.Info($"Handed the fans back to the BIOS on exit (release rc={releaseRc}, mode rc={modeRc})");
+                }
+                else if (s.fanAuto && _autoSent is PerformanceMode autoMode && autoMode != s.PerformanceMode)
+                {
+                    // Nobody is left to step Auto back down, so leave the laptop in the last mode picked by hand.
+                    var modeRc = _client.SetFanMode(s.PerformanceMode);
+                    AppLog.Info($"Left Auto mode on exit: set {DisplayName(s.PerformanceMode)} (rc={modeRc})");
                 }
             }
             catch (Exception ex)
@@ -476,15 +647,18 @@ namespace OmenFanPlus.Services
         }
 
         // Only writes user.config when something changed (re-applying after sleep shouldn't rewrite it).
-        private static void SaveMode(PerformanceMode? mode = null, bool max = false, bool off = false, bool custom = false)
+        private static void SaveMode(PerformanceMode? mode = null, bool max = false, bool off = false, bool custom = false,
+            bool auto = false)
         {
             var s = Settings.Default;
-            if (s.fanMax == max && s.fanOff == off && s.fanCustom == custom && (mode == null || s.PerformanceMode == mode))
+            if (s.fanMax == max && s.fanOff == off && s.fanCustom == custom && s.fanAuto == auto &&
+                (mode == null || s.PerformanceMode == mode))
                 return;
 
             s.fanMax = max;
             s.fanOff = off;
             s.fanCustom = custom;
+            s.fanAuto = auto;
             if (mode != null)
                 s.PerformanceMode = mode.Value;
             TrySave();
@@ -587,6 +761,7 @@ namespace OmenFanPlus.Services
             SystemEvents.PowerModeChanged -= SystemEvents_PowerModeChanged;
             _pendingReapply?.Cancel();
             _maxKeepAlive.Dispose();
+            _autoTimer.Dispose();
         }
     }
 }

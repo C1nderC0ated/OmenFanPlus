@@ -25,6 +25,8 @@ namespace OmenFanPlus.Forms
         private readonly ToolTip _temperatureToolTip = new();
         private readonly ToolTip _modeToolTip = new() { AutoPopDelay = 15000 };
         private readonly Label _statusLabel = new();
+        private readonly Button _autoButton = new();
+        private readonly Button _autoCogButton = new();
         private long _hiddenByDeactivateAt;
         private int _focusAttempts;
 
@@ -52,6 +54,33 @@ namespace OmenFanPlus.Forms
             _statusLabel.TextAlign = ContentAlignment.MiddleLeft;
             _statusLabel.Anchor = AnchorStyles.Top | AnchorStyles.Left;
             Controls.Add(_statusLabel);
+
+            // Auto: the thermal profile follows the temperature. Styled like the designer buttons.
+            _autoButton.Text = "Auto";
+            _autoButton.Size = DefaultButton.Size;
+            _autoButton.Font = DefaultButton.Font;
+            _autoButton.BackColor = inactiveColor;
+            _autoButton.ForeColor = inactiveTextColor;
+            _autoButton.Margin = Padding.Empty;
+            _autoButton.FlatStyle = FlatStyle.Flat;
+            _autoButton.FlatAppearance.BorderSize = 0;
+            _autoButton.UseVisualStyleBackColor = false;
+            _autoButton.Anchor = AnchorStyles.Top | AnchorStyles.Left;
+            _autoButton.Click += AutoButton_Click;
+            Controls.Add(_autoButton);
+            _autoCogButton.Text = CustomCogButton.Text;
+            _autoCogButton.Size = CustomCogButton.Size;
+            _autoCogButton.Margin = Padding.Empty;
+            _autoCogButton.FlatStyle = FlatStyle.Flat;
+            _autoCogButton.FlatAppearance.BorderSize = 0;
+            _autoCogButton.Font = CustomCogButton.Font;
+            _autoCogButton.BackColor = CustomCogButton.BackColor;
+            _autoCogButton.ForeColor = CustomCogButton.ForeColor;
+            _autoCogButton.UseVisualStyleBackColor = false;
+            _autoCogButton.Anchor = AnchorStyles.Top | AnchorStyles.Left;
+            _autoCogButton.Click += AutoCogButton_Click;
+            Controls.Add(_autoCogButton);
+            _autoCogButton.BringToFront();
 
             focusTimer.Tick += delegate
             {
@@ -123,7 +152,16 @@ namespace OmenFanPlus.Forms
                 button.Anchor = AnchorStyles.Top | AnchorStyles.Left;
 
             OffButton.Visible = MaxButton.Visible = CustomButton.Visible = CustomCogButton.Visible = manual;
-            var rowBottom = manual ? OffButton.Bottom : DefaultButton.Bottom;
+
+            // Auto goes under the mode buttons: in the Off/Max/Custom row's place on boards without manual fan
+            // control, in a row of its own below it on boards with it.
+            var rowGap = OffButton.Top - QuietButton.Bottom;
+            var autoTop = (manual ? OffButton.Bottom : DefaultButton.Bottom) + rowGap;
+            _autoButton.Location = new Point(DefaultButton.Left, autoTop);
+            _autoCogButton.Location = new Point(_autoButton.Right - _autoCogButton.Width, autoTop);
+            _autoButton.Visible = _autoCogButton.Visible = true;
+
+            var rowBottom = _autoButton.Bottom;
             _statusLabel.SetBounds(QuietButton.Left, rowBottom + 6, PerformanceButton.Right - QuietButton.Left, 18);
             ClientSize = new Size(ClientSize.Width, _statusLabel.Bottom + _bottomMargin);
             ResumeLayout();
@@ -163,6 +201,11 @@ namespace OmenFanPlus.Forms
             _modeToolTip.SetToolTip(MaxButton, "Max: fans at full speed (re-sent every 90 seconds).");
             _modeToolTip.SetToolTip(OffButton, "Off: fans stopped until the BIOS takes over again (about 2 minutes).");
             _modeToolTip.SetToolTip(CustomButton, "Custom: your fan curve (edit it with the gear button).");
+            var calm = FanModeController.DisplayName(thirdMode);
+            _modeToolTip.SetToolTip(_autoButton,
+                $"Auto: the profile follows the hottest of CPU and GPU: {calm} when cool, Default in between,\n" +
+                "Performance when hot (never on battery). Set the temperatures with the gear button.");
+            _modeToolTip.SetToolTip(_autoCogButton, "Auto mode thresholds");
         }
 
         private void ShowSavedMode()
@@ -170,7 +213,9 @@ namespace OmenFanPlus.Forms
             var s = Settings.Default;
             var manual = _fanModes.Capabilities.ManualFanControlSupported;
 
-            if (manual && (s.fanMax || s.fanOff))
+            if (s.fanAuto)
+                ShowAutoActive();
+            else if (manual && (s.fanMax || s.fanOff))
                 ActivePerformanceModeChange(s.fanMax, s.fanOff);
             else if (manual && s.fanCustom)
                 ActivePerformanceModeChange(isCustom: true);
@@ -302,6 +347,24 @@ namespace OmenFanPlus.Forms
             StartCurveTimer();
         }
 
+        private void AutoButton_Click(object? sender, EventArgs e)
+        {
+            StopCurveTimer();
+            _fanModes.ApplyAuto();
+            ShowSavedMode();
+            UpdateStatusLabel();
+        }
+
+        private void AutoCogButton_Click(object? sender, EventArgs e)
+        {
+            using var dialog = new FormAutoMode(_fanModes);
+            if (dialog.ShowDialog() == DialogResult.OK)
+            {
+                _fanModes.ReloadAutoThresholds();
+                UpdateStatusLabel();
+            }
+        }
+
         private void CustomCogButton_Click(object sender, EventArgs e)
         {
             if (!_fanModes.Capabilities.ManualFanControlSupported)
@@ -396,6 +459,15 @@ namespace OmenFanPlus.Forms
             MaxButton.ForeColor = inactiveTextColor;
             CustomButton.BackColor = inactiveColor;
             CustomButton.ForeColor = inactiveTextColor;
+            _autoButton.BackColor = inactiveColor;
+            _autoButton.ForeColor = inactiveTextColor;
+        }
+        private void ShowAutoActive()
+        {
+            ResetAllButtons();
+            _autoButton.BackColor = activeColor;
+            _autoButton.ForeColor = activeTextColor;
+            activeButton = _autoButton;
         }
         public void ActivePerformanceModeChange(bool isMax, bool isOff)
         {

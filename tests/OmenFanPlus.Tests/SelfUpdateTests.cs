@@ -118,6 +118,47 @@ public class SelfUpdateTests
         }
     }
 
+    /// <summary>
+    /// The real release feed, end to end, the way the app reads it: the latest GitHub release must parse, its
+    /// SHA256SUMS.txt must agree with GitHub's digest, and the zip (a few MB) must download and verify. Set
+    /// OMENFANPLUS_INTEGRATION=1 to run it; skipped otherwise so the normal run stays offline. Nothing is installed.
+    /// </summary>
+    [Fact]
+    public async Task Integration_the_latest_release_parses_and_its_zip_verifies()
+    {
+        if (Environment.GetEnvironmentVariable("OMENFANPLUS_INTEGRATION") != "1")
+            return;
+
+        using var http = new HttpClient();
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("OmenFanPlus-tests/1.0");
+        using var json = JsonDocument.Parse(await http.GetStringAsync($"https://api.github.com/repos/{UpdateCatalog.AppRepository}/releases/latest"));
+        var release = UpdateCheck.FindAppRelease(json.RootElement);
+        Assert.NotNull(release);
+        Assert.NotNull(release.Sha256);
+        Assert.NotNull(release.Sums);
+        Assert.True(DependencyInstaller.IsAllowedSource(release.Zip));
+        Assert.True(DependencyInstaller.IsAllowedSource(release.Sums));
+
+        var listed = UpdateCheck.ParseSha256Sums(await http.GetStringAsync(release.Sums), Path.GetFileName(release.Zip.LocalPath));
+        Assert.Equal(release.Sha256, listed, ignoreCase: true);
+
+        var folder = Path.Combine(Path.GetTempPath(), "OmenFanPlus-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            var path = await new DependencyInstaller().DownloadVerifiedAsync(AvailableUpdate.App(release.Version, release.Zip, release.Sha256), folder, CancellationToken.None);
+            using var archive = ZipFile.OpenRead(path);
+            var names = archive.Entries.Select(e => e.FullName).ToArray();
+            Assert.Contains("OmenFanPlus.exe", names);
+            Assert.Contains("OmenFanPlus.dll", names);
+            Assert.Contains("OmenFanPlus.runtimeconfig.json", names);
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
     // ---- how PowerShell is started ------------------------------------------------------------------------
 
     [Fact]

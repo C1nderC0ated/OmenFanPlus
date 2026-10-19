@@ -132,7 +132,8 @@ namespace OmenFanPlus.Services
         // its log is kept for the app to copy into its own log.
         private static void AppendSelfUpdate(Action<string> line, ScriptItem item)
         {
-            const string robocopyOptions = "/MIR /XD $updatesDir /R:2 /W:2 /NP /NFL /NDL /NJH /NJS /LOG+:$robocopyLog";
+            // No quiet switches: the console output is discarded anyway, and the log should name every file.
+            const string robocopyOptions = "/MIR /XD $updatesDir /R:2 /W:2 /NP /LOG+:$robocopyLog";
             line($"    $code = '{BadZip}'");
             line("    $restore = ''");
             line("    $installDir = Split-Path -Path $Exe -Parent");

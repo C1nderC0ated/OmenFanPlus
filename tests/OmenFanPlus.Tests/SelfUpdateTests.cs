@@ -254,7 +254,9 @@ public class SelfUpdateTests
             Assert.False(File.Exists(Path.Combine(install, "old.dll")), "/MIR must remove files the new version doesn't have");
             Assert.Equal("must survive /MIR", await File.ReadAllTextAsync(Path.Combine(install, "updates", "keep.txt")));
             Assert.Equal("old", await File.ReadAllTextAsync(Path.Combine(staging, "backup", "old.dll")));
-            Assert.True(File.Exists(Path.Combine(staging, "robocopy.log")), "robocopy's log must be kept for the app log");
+            var robocopyLog = await File.ReadAllTextAsync(Path.Combine(staging, "robocopy.log"));
+            Assert.Contains("new.dll", robocopyLog);   // the kept log names the files it copied
+            Assert.Contains("old.dll", robocopyLog);   // and the ones it removed
         }
         finally
         {

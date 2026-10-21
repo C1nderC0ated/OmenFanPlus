@@ -12,10 +12,19 @@ namespace OmenFanPlus.Forms
 
         private readonly Timer hideTimer = new() { Interval = 1000 };
         private readonly Timer fadeOutTimer = new() { Interval = 7 };
+        private readonly Label modeLabel = new()
+        {
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleCenter,
+            Font = new Font("Segoe UI", 15F, FontStyle.Bold),
+            ForeColor = Color.FromArgb(230, 230, 230),
+            Visible = false,
+        };
 
         public FormNotify()
         {
             InitializeComponent();
+            Controls.Add(modeLabel);
 
             hideTimer.Tick += (sender, e) =>
             {
@@ -65,6 +74,22 @@ namespace OmenFanPlus.Forms
                     statusImage.Image = Resources.trackpadLocked;
             }
 
+            modeLabel.Visible = false;
+            statusImage.Visible = true;
+            ShowNotice();
+        }
+
+        /// <summary>The same notice with a word instead of a picture: the fan mode the OMEN key switched to.</summary>
+        public void NotifyText(string text)
+        {
+            statusImage.Visible = false;
+            modeLabel.Text = text;
+            modeLabel.Visible = true;
+            ShowNotice();
+        }
+
+        private void ShowNotice()
+        {
             // Above the taskbar of the screen the mouse is on, whatever its scaling.
             var area = Screen.FromPoint(Cursor.Position).WorkingArea;
             var margin = LogicalToDeviceUnits(12);

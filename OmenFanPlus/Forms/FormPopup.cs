@@ -197,7 +197,8 @@ namespace OmenFanPlus.Forms
             _modeToolTip.SetToolTip(DefaultButton, "Default: HP's balanced mode.");
             _modeToolTip.SetToolTip(PerformanceButton,
                 "Performance: higher CPU and GPU power limits; the fans ramp up more under load.\n" +
-                "The BIOS may refuse it on battery; it is sent again when the charger is plugged in.");
+                "The BIOS may refuse it on battery; it is sent again when the charger is plugged in\n" +
+                "(with charger and battery modes on, the charger's own mode is applied then).");
             _modeToolTip.SetToolTip(MaxButton, "Max: fans at full speed (re-sent every 90 seconds).");
             _modeToolTip.SetToolTip(OffButton, "Off: fans stopped until the BIOS takes over again (about 2 minutes).");
             _modeToolTip.SetToolTip(CustomButton, "Custom: your fan curve (edit it with the gear button).");

@@ -28,6 +28,10 @@ namespace OmenFanPlus.Forms
             _fanModes = fanModes;
             var calmName = FanModeController.DisplayName(fanModes.Capabilities.QuietOrCoolMode);
 
+            SuspendLayout();
+            // Laid out in 96-dpi pixels; WinForms scales everything for the screen's scaling.
+            AutoScaleDimensions = new SizeF(96F, 96F);
+            AutoScaleMode = AutoScaleMode.Dpi;
             Text = "OmenFanPlus - Auto mode";
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
@@ -93,6 +97,8 @@ namespace OmenFanPlus.Forms
             _previewTimer.Tick += (s, e) => UpdatePreview();
             _previewTimer.Start();
             UpdatePreview();
+            ResumeLayout(false);
+            PerformLayout();
         }
 
         private NumericUpDown AddField(int top, string caption, string unit, int min, int max, int value)

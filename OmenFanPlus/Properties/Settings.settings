@@ -56,5 +56,20 @@
     <Setting Name="LastInstallAttempt" Type="System.String" Scope="User">
       <Value Profile="(Default)" />
     </Setting>
+    <Setting Name="TrayShowsTemperature" Type="System.Boolean" Scope="User">
+      <Value Profile="(Default)">True</Value>
+    </Setting>
+    <Setting Name="OmenKeyCyclesModes" Type="System.Boolean" Scope="User">
+      <Value Profile="(Default)">False</Value>
+    </Setting>
+    <Setting Name="PowerModesEnabled" Type="System.Boolean" Scope="User">
+      <Value Profile="(Default)">False</Value>
+    </Setting>
+    <Setting Name="ChargerMode" Type="System.String" Scope="User">
+      <Value Profile="(Default)">Default</Value>
+    </Setting>
+    <Setting Name="BatteryMode" Type="System.String" Scope="User">
+      <Value Profile="(Default)">Comfort</Value>
+    </Setting>
   </Settings>
 </SettingsFile>

@@ -190,8 +190,10 @@ namespace OmenFanPlus.Services
                 var releaseRc = ReleaseManualFanControl();
                 var rc = _client.SetFanMode(mode);
                 // A rejected mode isn't remembered (it would be re-sent at every start); Performance is the
-                // exception, because the EC refuses it on battery and it is sent again on AC.
-                if (rc is 0 or < 0 || mode == PerformanceMode.Performance)
+                // exception, because the EC refuses it on battery and it is sent again on AC. Not so with one mode
+                // per power source: on AC the charger's own mode is applied, so a refused Performance would only
+                // replace the battery mode with one the firmware refuses.
+                if (rc is 0 or < 0 || (mode == PerformanceMode.Performance && !Settings.Default.PowerModesEnabled))
                     SaveMode(mode);
                 return Report(DisplayName(mode), rc, releaseRc);
             });
@@ -502,24 +504,82 @@ namespace OmenFanPlus.Services
             RetryIfTransient(rc, reason);
         }
 
+        /// <summary>Applies a choice: Auto, or the thermal profile behind it.</summary>
+        public bool ApplyChoice(ModeChoice choice) =>
+            choice == ModeChoice.Auto
+                ? ApplyAuto()
+                : ApplyThermalMode(ModeChoices.ToPerformanceMode(choice, Capabilities.QuietOrCoolMode));
+
+        /// <summary>
+        /// The OMEN key's "next mode": Comfort, Default, Performance, Auto, round again (Performance skipped on
+        /// battery). Returns the name of the mode now applied, for the on-screen notice.
+        /// </summary>
+        public string CycleMode()
+        {
+            var s = Settings.Default;
+            var onBattery = SystemInformation.PowerStatus.PowerLineStatus == PowerLineStatus.Offline;
+            var current = ModeChoices.FromSaved(s.fanAuto, s.PerformanceMode, manualActive: s.fanMax || s.fanOff || s.fanCustom);
+            var next = ModeChoices.Next(current, onBattery);
+            // The notice must not name a mode the BIOS refused; the tray tooltip has the details then.
+            return ApplyChoice(next) ? ModeChoices.DisplayName(next, Capabilities.QuietOrCoolMode) : "Not applied";
+        }
+
+        /// <summary>After the charger/battery dialog: apply the mode for the current power source now.</summary>
+        public void ApplyPowerSourceModes()
+        {
+            _sourceChanged = true;
+            ApplySavedMode("charger and battery modes changed");
+        }
+
+        // Set when the power source changed (or the dialog asked for its mode), so the per-source mode replaces
+        // a Max or custom curve the user had picked; cleared once that apply got a definite answer.
+        private volatile bool _sourceChanged;
+
+        // While a saved mode is re-applied, SaveMode must not write the per-source slot: the choice came from a
+        // slot already, and the power source may have changed since it was read.
+        private static volatile bool _reapplyingSavedMode;
+
         // Returns the BIOS return code of the mode that was sent.
         private int ApplySavedModeLocked(string reason)
         {
             var s = Settings.Default;
             AppLog.Info($"Re-applying saved mode ({reason})");
 
-            if (s.fanAuto)
-                ApplyAuto();
-            else if (Capabilities.ManualFanControlSupported && s.fanMax)
-                ApplyMax();
-            else if (Capabilities.ManualFanControlSupported && s.fanCustom)
-                ApplyCustom();
-            else
+            // Max and the custom curve are one-off manual states, kept across sleep and restarts as before; a
+            // change of power source is what replaces them with that source's mode.
+            var manualHeld = Capabilities.ManualFanControlSupported && (s.fanMax || s.fanCustom) && !_sourceChanged;
+
+            _reapplyingSavedMode = true;
+            try
             {
-                // "Off" is never switched on automatically: it needs the warning the button shows.
-                ApplyThermalMode(s.PerformanceMode);
+                if (s.PowerModesEnabled && !manualHeld)
+                {
+                    // One mode per power source; whichever the user picked last for this source.
+                    var onBattery = SystemInformation.PowerStatus.PowerLineStatus == PowerLineStatus.Offline;
+                    var choice = ModeChoices.Parse(onBattery ? s.BatteryMode : s.ChargerMode) ?? ModeChoice.Default;
+                    AppLog.Info($"Mode for {(onBattery ? "battery" : "the charger")}: {choice}");
+                    ApplyChoice(choice);
+                }
+                else if (s.fanAuto)
+                    ApplyAuto();
+                else if (Capabilities.ManualFanControlSupported && s.fanMax)
+                    ApplyMax();
+                else if (Capabilities.ManualFanControlSupported && s.fanCustom)
+                    ApplyCustom();
+                else
+                {
+                    // "Off" is never switched on automatically: it needs the warning the button shows.
+                    ApplyThermalMode(s.PerformanceMode);
+                }
+            }
+            finally
+            {
+                _reapplyingSavedMode = false;
             }
 
+            // A transient failure (-1, 2) is retried with the flag still set.
+            if (_lastRc is >= 0 and not 2)
+                _sourceChanged = false;
             return _lastRc;
         }
 
@@ -651,8 +711,21 @@ namespace OmenFanPlus.Services
             bool auto = false)
         {
             var s = Settings.Default;
+
+            // With one mode per power source, a thermal mode or Auto picked now is also the choice for the source
+            // the laptop is on (Max, Off and the custom curve stay one-off manual states).
+            var onBattery = SystemInformation.PowerStatus.PowerLineStatus == PowerLineStatus.Offline;
+            var slot = onBattery ? s.BatteryMode : s.ChargerMode;
+            var newSlot = slot;
+            if (s.PowerModesEnabled && !_reapplyingSavedMode && !max && !off && !custom)
+            {
+                var choice = auto ? ModeChoice.Auto : ModeChoices.FromSaved(false, mode ?? s.PerformanceMode, false);
+                if (choice != null)
+                    newSlot = ModeChoices.Key(choice.Value);
+            }
+
             if (s.fanMax == max && s.fanOff == off && s.fanCustom == custom && s.fanAuto == auto &&
-                (mode == null || s.PerformanceMode == mode))
+                (mode == null || s.PerformanceMode == mode) && newSlot == slot)
                 return;
 
             s.fanMax = max;
@@ -661,6 +734,10 @@ namespace OmenFanPlus.Services
             s.fanAuto = auto;
             if (mode != null)
                 s.PerformanceMode = mode.Value;
+            if (onBattery)
+                s.BatteryMode = newSlot;
+            else
+                s.ChargerMode = newSlot;
             TrySave();
         }
 
@@ -715,6 +792,7 @@ namespace OmenFanPlus.Services
                     {
                         _lastPowerLine = line;
                         _applyRetry = 0;
+                        _sourceChanged = true;
                         ScheduleReapply($"power source changed to {line}", TimeSpan.FromSeconds(3));
                     }
                     break;

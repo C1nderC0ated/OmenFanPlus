@@ -4,6 +4,13 @@ OmenFanPlus is a lightweight tray app for HP OMEN laptops: thermal modes, fan co
 
 It continues **OMEN Hub Lighter Plus** ([P2GR/OmenHubLighterPlus](https://github.com/P2GR/OmenHubLighterPlus)), which extended **OMEN Hub Light** by determ1ne: an opensource and lightweight substitute for a series programs from HP, based on reverse engineering and keeping a similar architecture to HP's programs.
 
+## What's new in 2.2 (October 2026)
+
+- **Temperature in the tray icon.** The icon shows the CPU temperature (hover it for CPU and GPU); tray menu > *Show temperature in tray icon* turns it off.
+- **OMEN key cycles fan modes.** Tick tray menu > *OMEN key cycles fan modes* and the key switches Comfort → Default → Performance → Auto (round again), with a short on-screen notice of the mode it picked, instead of opening the popup. On battery it skips Performance, which the firmware refuses there. While it is on, it takes precedence over the remap dialog's options.
+- **One mode for the charger, one for battery.** Tray menu > *Charger and battery modes...*: pick a mode (Comfort, Default, Performance or Auto) for each power source and the app switches when you plug in or out, at startup and after sleep. A mode you pick by hand is remembered for the power source you are on at the time (a Performance the firmware refuses on battery isn't); Max, Off and the custom curve last until the next plug or unplug.
+- Since 2.1: the app updates itself from GitHub releases (see [Dependency updates](#dependency-updates)), and the installed copy is started through its scheduled task.
+
 ## What's new in 2.0 (October 2026)
 
 - **New name:** OmenFanPlus (was OmenHubLighterPlus). Settings, a saved fan curve and the "Run on startup" task carry over from the old version.
@@ -97,6 +104,7 @@ Currently, the application supports the following features:
 - Thermal modes through the BIOS (command 0x1A): Default / Performance / Comfort (HP's Cool profile) on OMEN boards, Default / Performance / Quiet on Victus boards
 - Fan Max / Off and a **Custom Fan Curve**, only where the BIOS supports manual fan levels (commands 0x2D/0x2E)
 - **Auto mode**: the thermal mode follows the temperature (see below)
+- **Charger and battery modes**, the **OMEN key cycling through the modes**, and the **CPU temperature in the tray icon** (all in the tray menu)
 
 ### What works on which laptop
 

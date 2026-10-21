@@ -237,5 +237,65 @@ namespace OmenFanPlus.Properties {
             }
         }
 
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("True")]
+        public bool TrayShowsTemperature {
+            get {
+                return ((bool)(this["TrayShowsTemperature"]));
+            }
+            set {
+                this["TrayShowsTemperature"] = value;
+            }
+        }
+
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("False")]
+        public bool OmenKeyCyclesModes {
+            get {
+                return ((bool)(this["OmenKeyCyclesModes"]));
+            }
+            set {
+                this["OmenKeyCyclesModes"] = value;
+            }
+        }
+
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("False")]
+        public bool PowerModesEnabled {
+            get {
+                return ((bool)(this["PowerModesEnabled"]));
+            }
+            set {
+                this["PowerModesEnabled"] = value;
+            }
+        }
+
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("Default")]
+        public string ChargerMode {
+            get {
+                return ((string)(this["ChargerMode"]));
+            }
+            set {
+                this["ChargerMode"] = value;
+            }
+        }
+
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("Comfort")]
+        public string BatteryMode {
+            get {
+                return ((string)(this["BatteryMode"]));
+            }
+            set {
+                this["BatteryMode"] = value;
+            }
+        }
+
     }
 }

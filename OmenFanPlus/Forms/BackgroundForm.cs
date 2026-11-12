@@ -203,9 +203,10 @@ namespace OmenFanPlus.Forms
             {
                 CheckOnClick = true,
                 Checked = Settings.Default.AutoInstallUpdates,
-                ToolTipText = "Downloads .NET runtime and PawnIO updates from their publishers, checks their hashes and " +
-                              "signatures, then closes OmenFanPlus, installs them and starts it again. Needs the automatic " +
-                              "check and the installed copy in Program Files.",
+                ToolTipText = "Downloads OmenFanPlus, .NET runtime and PawnIO updates from their publishers, checks their hashes " +
+                              "and signatures, then closes OmenFanPlus, installs them and starts it again. A new .NET version " +
+                              "is never installed this way, only offered. Needs the automatic check and the installed copy " +
+                              "in Program Files.",
             };
             autoInstall.CheckedChanged += (sender, e) =>
             {
@@ -238,19 +239,59 @@ namespace OmenFanPlus.Forms
                 return;
             }
 
-            var names = string.Join(" and ", report.Available.Select(u => $"{u.DisplayName} {u.Version}"));
-            var answer = MessageBox.Show(
-                report.Text + Environment.NewLine +
-                $"Install {names} now?" + Environment.NewLine + Environment.NewLine +
+            const string how =
                 "OmenFanPlus downloads it from the publisher, checks it against the published hash (and the signature, " +
-                "for installers), then closes, installs it and starts again. Nothing else is touched, and Windows is not restarted.",
-                "OmenFanPlus updates", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
-            if (answer != DialogResult.Yes)
+                "for installers), then closes, installs it and starts again. Nothing else is touched, and Windows is not restarted.";
+
+            // Two questions, so fixes can be taken without the move to a new .NET version, and the other way round.
+            var updates = report.Available.Where(u => u.AutoInstall).ToList();
+            var offers = report.Available.Where(u => !u.AutoInstall).ToList();
+            var chosen = new List<AvailableUpdate>();
+
+            if (updates.Count > 0)
+            {
+                var answer = MessageBox.Show(
+                    report.Text + Environment.NewLine +
+                    $"Install {UpdateCheck.Names(updates)} now?" + Environment.NewLine + Environment.NewLine + how,
+                    "OmenFanPlus updates", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                if (answer == DialogResult.Yes)
+                    chosen.AddRange(updates);
+            }
+
+            if (offers.Count > 0)
+            {
+                var answer = MessageBox.Show(
+                    (updates.Count > 0 ? "" : report.Text + Environment.NewLine) +
+                    $"{(chosen.Count > 0 ? "Also install" : "Install")} {UpdateCheck.Names(offers)}?" + Environment.NewLine + Environment.NewLine +
+                    $"That is a new .NET version, not a fix. OmenFanPlus runs on it from its next start; .NET {Environment.Version.Major} stays " +
+                    "installed and keeps working, so this is yours to decide." +
+                    (updates.Count > 0 ? "" : Environment.NewLine + Environment.NewLine + how),
+                    "OmenFanPlus updates", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                if (answer == DialogResult.Yes)
+                    chosen.AddRange(offers);
+            }
+
+            if (chosen.Count == 0)
                 return;
 
-            var error = await _updates.InstallAsync(report.Available);
+            var error = await _updates.InstallAsync(chosen, ConfirmNewRuntime);
             if (error != null)
                 MessageBox.Show(error, "OmenFanPlus updates", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+
+        // An OmenFanPlus version built for a .NET this PC doesn't have: that runtime has to go in first, and only if
+        // the user says so.
+        private bool ConfirmNewRuntime(AvailableUpdate app, AvailableUpdate runtime)
+        {
+            if (InvokeRequired)
+                return Invoke(() => ConfirmNewRuntime(app, runtime));
+
+            return MessageBox.Show(
+                $"{app.DisplayName} {app.Version} is built for .NET {runtime.Version.Major}, which isn't installed on this PC." +
+                Environment.NewLine + Environment.NewLine +
+                $"Install {runtime.DisplayName} {runtime.Version} first, from Microsoft, checked like every other installer? " +
+                $"Without it {app.DisplayName} {app.Version} can't be installed, and nothing is changed.",
+                "OmenFanPlus updates", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes;
         }
 
         private void Balloon(string title, string message, ToolTipIcon icon)

@@ -10,16 +10,14 @@ namespace OmenFanPlus.Services
 
     /// <summary>
     /// What is fixed about each thing the app can update: who signs its installer (null for the app's own zip,
-    /// which carries no signature), how it is run silently, and the package names for the manual instructions.
-    /// Nothing of this is ever taken from data that arrived over the network.
+    /// which carries no signature) and how it is run silently. Nothing of this is ever taken from data that
+    /// arrived over the network.
     /// </summary>
     internal sealed record UpdateCatalogEntry(
         string DisplayName,
         string HashAlgorithm,
         string InstallerArguments,
-        string? SignerOrganization,
-        string ChocoPackage,
-        string WingetId);
+        string? SignerOrganization);
 
     internal static class UpdateCatalog
     {
@@ -29,12 +27,10 @@ namespace OmenFanPlus.Services
         public static UpdateCatalogEntry Describe(UpdateComponent component) => component switch
         {
             UpdateComponent.DotNetRuntime => new UpdateCatalogEntry(".NET Desktop Runtime", "SHA512",
-                "/install /quiet /norestart", "Microsoft Corporation",
-                "dotnet-10.0-desktopruntime", "Microsoft.DotNet.DesktopRuntime.10"),
+                "/install /quiet /norestart", "Microsoft Corporation"),
             UpdateComponent.PawnIo => new UpdateCatalogEntry("PawnIO", "SHA256",
-                "-install -silent", "namazso",
-                "pawnio", "namazso.PawnIO"),
-            UpdateComponent.App => new UpdateCatalogEntry("OmenFanPlus", "SHA256", "", null, "", ""),
+                "-install -silent", "namazso"),
+            UpdateComponent.App => new UpdateCatalogEntry("OmenFanPlus", "SHA256", "", null),
             _ => throw new ArgumentOutOfRangeException(nameof(component), component, null),
         };
     }
@@ -44,7 +40,12 @@ namespace OmenFanPlus.Services
     /// publisher serves the file and the hash the publisher lists for it (always required; a release whose hash
     /// can't be read is reported but not installed).
     /// </summary>
-    internal sealed record AvailableUpdate(UpdateComponent Component, Version Version, Uri DownloadUrl, string ExpectedHash)
+    /// <param name="AutoInstall">
+    /// False for something the user should decide on, such as moving to a new .NET version: "Install updates
+    /// automatically" leaves it alone, and it is installed only from the update dialog.
+    /// </param>
+    internal sealed record AvailableUpdate(UpdateComponent Component, Version Version, Uri DownloadUrl, string ExpectedHash,
+        bool AutoInstall = true)
     {
         public UpdateCatalogEntry Info => UpdateCatalog.Describe(Component);
         public string DisplayName => Info.DisplayName;

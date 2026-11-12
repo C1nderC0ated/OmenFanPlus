@@ -83,12 +83,33 @@ namespace OmenFanPlus.Services
         public const string CannotSelfUpdateHint =
             "This copy doesn't run as OmenFanPlus.exe in a folder named OmenFanPlus, so it won't replace its files itself.";
 
+        /// <summary>What to do about the .NET runtime before an app update goes in.</summary>
+        internal enum RuntimeStep
+        {
+            /// <summary>A runtime that can start the new version is installed (or is being installed in this run).</summary>
+            NotNeeded,
+            /// <summary>It needs a runtime this PC lacks, and someone can be asked whether to install it.</summary>
+            Ask,
+            /// <summary>It needs a runtime this PC lacks, and nobody is there to ask: the update is left for the dialog.</summary>
+            Refuse,
+        }
+
+        internal static RuntimeStep RuntimeStepFor(RuntimeRequirement requires, IEnumerable<Version> runtimes, bool canAsk) =>
+            DotNetRuntimes.CanStart(requires, runtimes) ? RuntimeStep.NotNeeded
+            : canAsk ? RuntimeStep.Ask
+            : RuntimeStep.Refuse;
+
         /// <summary>
         /// Downloads and verifies every update into a fresh administrators-only folder, then starts the run
         /// script, which asks this app to quit. Throws <see cref="UpdateException"/> with a message for the user
         /// when something is off; nothing has been installed in that case.
         /// </summary>
-        public async Task StageAndInstallAsync(IReadOnlyList<AvailableUpdate> updates, CancellationToken ct)
+        /// <param name="confirmNewRuntime">
+        /// Asked when an app update needs a .NET runtime this PC lacks: (the app update, the runtime) and whether to
+        /// install the runtime too. Null when nobody can be asked (the automatic check): such an update is refused.
+        /// </param>
+        public async Task StageAndInstallAsync(IReadOnlyList<AvailableUpdate> updates,
+            Func<AvailableUpdate, AvailableUpdate, bool>? confirmNewRuntime, CancellationToken ct)
         {
             if (updates.Count == 0)
                 throw new UpdateException("Nothing to install.");
@@ -101,13 +122,42 @@ namespace OmenFanPlus.Services
             try
             {
                 var items = new List<ScriptItem>();
+                // What the new app version can count on: the runtimes on this PC, plus any being installed in this run.
+                var runtimes = DotNetRuntimes.InstalledDesktopRuntimes()
+                    .Concat(updates.Where(u => u.Component == UpdateComponent.DotNetRuntime).Select(u => u.Version))
+                    .ToList();
+
                 foreach (var update in updates)
                 {
                     var path = await DownloadVerifiedAsync(update, folder, ct);
-                    items.Add(new ScriptItem(update.Component, update.Version, path, update.Info.InstallerArguments));
+                    RuntimeRequirement? requires = null;
+                    if (update.Component == UpdateComponent.App)
+                    {
+                        requires = DotNetRuntimes.ReadRequirementFromZip(path) ?? throw new UpdateException(
+                            $"{update.DisplayName} {update.Version}: the package doesn't say which .NET it needs, so it wasn't installed.");
+                        var major = requires.MinimumDesktopRuntime.Major;
+                        var step = RuntimeStepFor(requires, runtimes, canAsk: confirmNewRuntime != null);
+                        if (step == RuntimeStep.Refuse)
+                            throw new UpdateException(
+                                $"{update.DisplayName} {update.Version} is built for .NET {major}, which isn't on this PC, and a new " +
+                                ".NET version is only installed when you ask.");
+                        if (step == RuntimeStep.Ask)
+                        {
+                            // A version built for a newer .NET: that runtime goes in first, in the same run, if the
+                            // user agrees.
+                            var runtime = await FindRuntimeForAsync(update, requires, ct);
+                            if (!confirmNewRuntime!(update, runtime))
+                                throw new UpdateException(
+                                    $"{update.DisplayName} {update.Version} needs .NET {major}, so it wasn't installed. Nothing was changed.");
+                            var runtimePath = await DownloadVerifiedAsync(runtime, folder, ct);
+                            items.Add(new ScriptItem(runtime.Component, runtime.Version, runtimePath, runtime.Info.InstallerArguments));
+                            runtimes.Add(runtime.Version);
+                        }
+                    }
+                    items.Add(new ScriptItem(update.Component, update.Version, path, update.Info.InstallerArguments, requires));
                 }
 
-                UpdateRunner.Start(folder, items);
+                UpdateRunner.Start(folder, OrderForScript(items));
                 Progress?.Invoke(this, "Verified. OmenFanPlus closes now, installs the update and starts again.");
             }
             catch
@@ -117,6 +167,42 @@ namespace OmenFanPlus.Services
                 throw;
             }
         }
+
+        /// <summary>
+        /// Finds the newest Desktop Runtime installer of a .NET version at Microsoft. Set by the update check, which
+        /// owns the release metadata; an app update that needs a runtime this PC lacks is refused without it.
+        /// </summary>
+        public Func<int, CancellationToken, Task<AvailableUpdate?>>? ResolveRuntime { get; set; }
+
+        private async Task<AvailableUpdate> FindRuntimeForAsync(AvailableUpdate app, RuntimeRequirement requires, CancellationToken ct)
+        {
+            var major = requires.MinimumDesktopRuntime.Major;
+            Progress?.Invoke(this, $"{app.DisplayName} {app.Version} needs .NET {major}; fetching that first...");
+            AvailableUpdate? runtime = null;
+            try
+            {
+                if (ResolveRuntime != null)
+                    runtime = await ResolveRuntime(major, ct);
+            }
+            catch (Exception ex) when (ex is HttpRequestException or System.Text.Json.JsonException or TaskCanceledException)
+            {
+                AppLog.Warn($"Update: looking up .NET {major} failed: {ex.Message}");
+            }
+
+            if (runtime == null || !DotNetRuntimes.Satisfies(requires, runtime.Version))
+                throw new UpdateException(
+                    $"{app.DisplayName} {app.Version} needs the .NET {major} Desktop Runtime, which isn't installed and couldn't be " +
+                    $"found at Microsoft. Nothing was installed; install .NET {major} by hand, then try again.");
+            AppLog.Info($"Update: {app.DisplayName} {app.Version} needs .NET {requires.MinimumDesktopRuntime} ({requires.RollForward}); adding .NET Desktop Runtime {runtime.Version}");
+            return runtime;
+        }
+
+        /// <summary>
+        /// Installers before the app's own files: a new app version is only put in place once the runtime it needs
+        /// has been installed (the script checks that again before it replaces anything).
+        /// </summary>
+        internal static IReadOnlyList<ScriptItem> OrderForScript(IEnumerable<ScriptItem> items) =>
+            items.OrderBy(i => i.Component == UpdateComponent.App ? 1 : 0).ToList();
 
         /// <summary>
         /// A new folder under <paramref name="root"/> (itself under Program Files) that only SYSTEM and

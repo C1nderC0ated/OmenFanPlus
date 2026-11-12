@@ -187,7 +187,7 @@ public class DependencyUpdateTests
     public void Microsofts_own_dotnet_host_passes_the_signature_check_for_Microsoft()
     {
         // Needs a machine with the shared runtime installed in the usual place (as the one running these tests is).
-        var dotnet = Path.Combine(UpdateRunner.DotnetRoot(), "dotnet.exe");
+        var dotnet = Path.Combine(DotNetRuntimes.DotnetRoot(), "dotnet.exe");
         if (!File.Exists(dotnet))
             return;
 
@@ -515,7 +515,7 @@ public class DependencyUpdateTests
     [InlineData(@"D:\tools\dotnet\shared\Microsoft.NETCore.App\10.0.0\", @"D:\tools\dotnet")]
     public void The_dotnet_root_is_three_levels_above_the_runtime_folder(string runtimeDirectory, string root)
     {
-        Assert.Equal(root, UpdateRunner.DotnetRootFrom(runtimeDirectory));
+        Assert.Equal(root, DotNetRuntimes.DotnetRootFrom(runtimeDirectory));
     }
 
     [Fact]

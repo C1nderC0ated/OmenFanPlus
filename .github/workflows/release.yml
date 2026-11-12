@@ -18,9 +18,12 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # Both: the app is built for .NET 10 and starts on the newest .NET installed, so it is tested on each.
       - uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: |
+            10.0.x
+            11.0.x
 
       - name: Check the tag against the project version
         shell: pwsh
@@ -32,8 +35,17 @@ jobs:
           }
           "VERSION=$version" | Add-Content -Path $env:GITHUB_ENV
 
-      - name: Test
+      # OMENFANPLUS_EXPECT_RUNTIME_MAJOR makes one test fail if the run used another .NET than intended.
+      - name: Test on .NET 11
         run: dotnet test OmenFanPlus.sln -c Release
+        env:
+          OMENFANPLUS_EXPECT_RUNTIME_MAJOR: 11
+
+      - name: Test on .NET 10
+        run: dotnet test OmenFanPlus.sln -c Release --no-build
+        env:
+          DOTNET_ROLL_FORWARD: Minor
+          OMENFANPLUS_EXPECT_RUNTIME_MAJOR: 10
 
       - name: Publish
         run: dotnet publish OmenFanPlus/OmenFanPlus.csproj -c Release -r win-x64 --self-contained false -o artifacts/publish

@@ -13,7 +13,8 @@ namespace OmenFanPlus.Services
     /// <summary>
     /// Checks whether the .NET runtime or PawnIO has a newer release (2 minutes after the app starts, then every
     /// 24 hours, unless turned off in the tray menu) and tells the user, with the Chocolatey or winget command
-    /// and the download link. With "Install updates automatically" on, or from the dialog's Install button, the
+    /// and the download link. For .NET that means fixes for the version the app is running on, plus a one-time
+    /// offer of a newer .NET version it is tested on (see <see cref="DotNetRuntimes"/>). With "Install updates automatically" on, or from the dialog's Install button, the
     /// app fetches the installer itself: see <see cref="DependencyInstaller"/> for how it is checked and run.
     /// OmenFanPlus itself is checked against its GitHub releases the same way. The checks send only GETs to
     /// builds.dotnet.microsoft.com, api.github.com and (as a fallback) github.com with a "OmenFanPlus/version"
@@ -21,7 +22,6 @@ namespace OmenFanPlus.Services
     /// </summary>
     internal sealed class UpdateCheck : IDisposable
     {
-        private const string RuntimeReleasesUrl = "https://builds.dotnet.microsoft.com/dotnet/release-metadata/10.0/releases.json";
         private const string PawnIoLatestApiUrl = "https://api.github.com/repos/namazso/PawnIO.Setup/releases/latest";
         // Redirects to .../releases/tag/<version>; used when the API's hourly limit is used up.
         private const string PawnIoLatestPageUrl = "https://github.com/namazso/PawnIO.Setup/releases/latest";
@@ -47,6 +47,7 @@ namespace OmenFanPlus.Services
         public UpdateCheck()
         {
             _installer.Progress += (sender, message) => InstallProgress?.Invoke(this, message);
+            _installer.ResolveRuntime = FindLatestRuntimeAsync;
             _timer = new System.Threading.Timer(_ => RunScheduled(), null, TimeSpan.FromMinutes(2), TimeSpan.FromHours(24));
         }
 
@@ -60,15 +61,21 @@ namespace OmenFanPlus.Services
                     return;
 
                 var install = Settings.Default.AutoInstallUpdates && DependencyInstaller.CanInstall;
-                var report = await RunAsync(notify: !install);
-                if (!install || report.Available.Count == 0)
+                var report = await RunAsync(notify: !install, notifyOffers: true);
+                if (!install)
+                    return;
+
+                // A move to a new .NET version is the user's call: it is offered, never installed unasked. The same
+                // holds for an app update that needs one: InstallAsync gets no way to ask here, so it refuses.
+                var automatic = report.Available.Where(u => u.AutoInstall).ToList();
+                if (automatic.Count == 0)
                     return;
 
                 // A version that was tried in the last 24 hours and is still not installed failed; the app restarts
                 // after every attempt, so without this it would try again 2 minutes later, for ever.
                 var now = DateTime.UtcNow;
-                var due = report.Available.Where(u => UpdateRunner.ShouldAutoInstall(Settings.Default.LastInstallAttempt, u, now)).ToList();
-                foreach (var skipped in report.Available.Except(due))
+                var due = automatic.Where(u => UpdateRunner.ShouldAutoInstall(Settings.Default.LastInstallAttempt, u, now)).ToList();
+                foreach (var skipped in automatic.Except(due))
                     AppLog.Info($"Update: not retrying {skipped.DisplayName} {skipped.Version} automatically yet (tried in the last 24 h)");
                 if (due.Count == 0)
                     return;
@@ -84,7 +91,9 @@ namespace OmenFanPlus.Services
         }
 
         /// <summary>Runs the checks and returns the report for the "Check for updates" dialog.</summary>
-        public async Task<UpdateReport> RunAsync(bool notify)
+        /// <param name="notify">Raise <see cref="UpdateAvailable"/> for updates (not when they get installed anyway).</param>
+        /// <param name="notifyOffers">Raise it for offers that are never installed unasked, such as a new .NET version.</param>
+        public async Task<UpdateReport> RunAsync(bool notify, bool notifyOffers = false)
         {
             if (Interlocked.Exchange(ref _running, 1) == 1)
                 return new UpdateReport("A check is already running.", Array.Empty<AvailableUpdate>());
@@ -95,7 +104,7 @@ namespace OmenFanPlus.Services
                 var available = new List<AvailableUpdate>();
                 await CheckAppAsync(report, available, notify);
                 report.AppendLine();
-                await CheckRuntimeAsync(report, available, notify);
+                await CheckRuntimeAsync(report, available, notify, notifyOffers);
                 report.AppendLine();
                 await CheckPawnIoAsync(report, available, notify);
 
@@ -112,7 +121,12 @@ namespace OmenFanPlus.Services
         /// them and starts the app again. Returns null when that is under way, else a message saying what went
         /// wrong (nothing was installed then).
         /// </summary>
-        public async Task<string?> InstallAsync(IReadOnlyList<AvailableUpdate> updates)
+        /// <param name="confirmNewRuntime">
+        /// Asked when an app update is built for a .NET this PC lacks: (the app update, the runtime it needs) and
+        /// whether to install that runtime too. Null for the automatic check, which never installs a new .NET version.
+        /// </param>
+        public async Task<string?> InstallAsync(IReadOnlyList<AvailableUpdate> updates,
+            Func<AvailableUpdate, AvailableUpdate, bool>? confirmNewRuntime = null)
         {
             if (Interlocked.Exchange(ref _installing, 1) == 1)
                 return "An installation is already running.";
@@ -123,7 +137,7 @@ namespace OmenFanPlus.Services
                 // Noted before anything is downloaded, so a failing download isn't repeated every 2 minutes either.
                 Settings.Default.LastInstallAttempt = UpdateRunner.RecordAttempt(Settings.Default.LastInstallAttempt, updates, DateTime.UtcNow);
                 FanModeController.TrySave();
-                await _installer.StageAndInstallAsync(updates, CancellationToken.None);
+                await _installer.StageAndInstallAsync(updates, confirmNewRuntime, CancellationToken.None);
                 return null;
             }
             catch (UpdateException ex)
@@ -142,15 +156,19 @@ namespace OmenFanPlus.Services
             }
         }
 
-        private async Task CheckRuntimeAsync(StringBuilder report, List<AvailableUpdate> available, bool notify)
+        // Two questions: are there fixes for the .NET version the app is running on, and is there a newer .NET
+        // version (that the app is tested on) it could run on instead.
+        private async Task CheckRuntimeAsync(StringBuilder report, List<AvailableUpdate> available, bool notify, bool notifyOffers)
         {
             var current = Environment.Version;
+            var major = current.Major;
             report.AppendLine($".NET runtime {current}");
             try
             {
-                using var json = JsonDocument.Parse(await Http.GetStringAsync(RuntimeReleasesUrl));
+                using var json = JsonDocument.Parse(await Http.GetStringAsync(DotNetRuntimes.ReleasesUrl(major)));
                 var root = json.RootElement;
-                if (!Version.TryParse(root.GetProperty("latest-runtime").GetString(), out var latest))
+                var latest = DotNetRuntimes.LatestRuntime(root);
+                if (latest == null)
                 {
                     report.AppendLine("  Couldn't read the latest version.");
                     return;
@@ -172,8 +190,7 @@ namespace OmenFanPlus.Services
                             report.AppendLine($"  {DependencyInstaller.CannotInstallHint}");
                         report.AppendLine("  Quit OmenFanPlus first (the installer removes the version it runs on), then:");
                     }
-                    AppendInstallOptions(report, "dotnet-10.0-desktopruntime", "Microsoft.DotNet.DesktopRuntime.10",
-                        "the Windows x64 \"Desktop Runtime\" from https://dotnet.microsoft.com/download/dotnet/10.0");
+                    AppendInstallOptions(report, DotNetRuntimes.ChocoPackage(major), DotNetRuntimes.WingetId(major), DotNetRuntimes.DownloadHint(major));
                     Notify(notify, $"runtime {latest}",
                         $".NET runtime {latest} is available{(security ? " with security fixes" : "")}. " +
                         "Right-click the tray icon > Check for updates to install it.");
@@ -182,13 +199,91 @@ namespace OmenFanPlus.Services
                 {
                     report.AppendLine("  Up to date.");
                 }
+                if (DotNetRuntimes.SupportPhase(root) == "eol")
+                    report.AppendLine($"  .NET {major} is out of support: Microsoft publishes no more fixes for it.");
                 AppLog.Info($"Update check: .NET runtime {current}, latest {latest}");
             }
             catch (Exception ex)
             {
                 report.AppendLine($"  Couldn't check: {ex.Message}");
                 AppLog.Warn($"Update check for the .NET runtime failed: {ex.Message}");
+                return;
             }
+
+            if (major < DotNetRuntimes.NewestTestedMajor)
+                await OfferNewerRuntimeAsync(current, DotNetRuntimes.NewestTestedMajor, report, available, notifyOffers);
+        }
+
+        // The app starts on the newest .NET installed, so installing a newer one moves it there at its next start.
+        // That is the user's call, so it is offered in the dialog and announced once, never installed unasked.
+        private async Task OfferNewerRuntimeAsync(Version current, int major, StringBuilder report, List<AvailableUpdate> available, bool notify)
+        {
+            try
+            {
+                var alreadyThere = DotNetRuntimes.InstalledDesktopRuntimes().LastOrDefault(v => v.Major > current.Major);
+                if (alreadyThere != null)
+                {
+                    // Installed since this copy started.
+                    report.AppendLine($"  .NET {alreadyThere} is installed too; OmenFanPlus runs on it after its next start.");
+                    return;
+                }
+
+                using var json = JsonDocument.Parse(await Http.GetStringAsync(DotNetRuntimes.ReleasesUrl(major)));
+                var root = json.RootElement;
+                var latest = DotNetRuntimes.LatestRuntime(root);
+                if (latest == null || !DotNetRuntimes.IsSupportedRelease(root))
+                    return; // still a preview, or already out of support
+
+                report.AppendLine($"  .NET {major} is out ({latest}). OmenFanPlus runs on it as soon as it is installed; .NET {current.Major} keeps working.");
+                var installer = FindRuntimeInstaller(root, latest);
+                var canInstall = installer != null && DependencyInstaller.CanInstall;
+                if (canInstall)
+                {
+                    available.Add(AvailableUpdate.DotNetRuntime(latest, installer!.Value.Url, installer.Value.Sha512) with { AutoInstall = false });
+                    report.AppendLine("  OmenFanPlus can install it (it closes, installs and starts again). By hand:");
+                }
+                else
+                {
+                    if (installer != null)
+                        report.AppendLine($"  {DependencyInstaller.CannotInstallHint}");
+                    report.AppendLine("  By hand, then start OmenFanPlus again:");
+                }
+                AppendInstallOptions(report, DotNetRuntimes.ChocoPackage(major), DotNetRuntimes.WingetId(major), DotNetRuntimes.DownloadHint(major));
+                AppLog.Info($"Update check: .NET {major} is available ({latest}); not installed");
+
+                // Said once, not after every start: it is an offer, not a fix. And only by a copy that can act on
+                // it, so the one announcement isn't used up by a copy run from a build folder.
+                if (notify && canInstall && Settings.Default.OfferedRuntimeMajor < major)
+                {
+                    Settings.Default.OfferedRuntimeMajor = major;
+                    FanModeController.TrySave();
+                    UpdateAvailable?.Invoke(this,
+                        $".NET {major} is out and OmenFanPlus can run on it. Right-click the tray icon > Check for updates to install it.");
+                }
+            }
+            catch (Exception ex) when (ex is HttpRequestException or JsonException or TaskCanceledException)
+            {
+                AppLog.Warn($"Update check for .NET {major} failed: {ex.Message}");
+            }
+        }
+
+        /// <summary>"OmenFanPlus 2.3.1 and PawnIO 2.3.0", for the dialog's questions.</summary>
+        internal static string Names(IEnumerable<AvailableUpdate> updates) =>
+            string.Join(" and ", updates.Select(u => $"{u.DisplayName} {u.Version}"));
+
+        /// <summary>
+        /// The newest Desktop Runtime of a .NET version, with its installer and hash from Microsoft's metadata.
+        /// Null when that version has no finished release or the metadata lacks the installer.
+        /// </summary>
+        internal static async Task<AvailableUpdate?> FindLatestRuntimeAsync(int major, CancellationToken ct)
+        {
+            using var json = JsonDocument.Parse(await Http.GetStringAsync(DotNetRuntimes.ReleasesUrl(major), ct));
+            var root = json.RootElement;
+            var latest = DotNetRuntimes.LatestRuntime(root);
+            if (latest == null)
+                return null;
+            var installer = FindRuntimeInstaller(root, latest);
+            return installer == null ? null : AvailableUpdate.DotNetRuntime(latest, installer.Value.Url, installer.Value.Sha512);
         }
 
         // The latest release alone doesn't say whether a skipped one in between was a security release.

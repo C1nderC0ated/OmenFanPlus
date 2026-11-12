@@ -60,13 +60,14 @@ if (-not $inProgramFiles) {
     $warnings++
 }
 
-$sdkHint = "The .NET 10 SDK is needed to build. Install it with one of:`n" +
-    "    choco upgrade dotnet-10.0-sdk -y`n" +
-    "    winget install --id Microsoft.DotNet.SDK.10 -e`n" +
-    "    or download 'SDK 10.0.x, Windows x64' from https://dotnet.microsoft.com/download/dotnet/10.0"
+$sdkHint = "A .NET SDK, version 10 or newer, is needed to build. Install the current one with one of:`n" +
+    "    choco upgrade dotnet-11.0-sdk -y`n" +
+    "    winget install --id Microsoft.DotNet.SDK.11 -e`n" +
+    "    or download 'SDK 11.0.x, Windows x64' from https://dotnet.microsoft.com/download/dotnet/11.0"
 if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) { throw $sdkHint }
+# The app is built for .NET 10 and starts on .NET 10 or newer, so any SDK from 10 up can build it.
 $sdks = @(& dotnet --list-sdks)
-if (-not ($sdks | Where-Object { $_ -match '^10\.' })) { throw $sdkHint }
+if (-not ($sdks | Where-Object { $_ -match '^(\d+)\.' -and [int]$Matches[1] -ge 10 })) { throw $sdkHint }
 
 Write-Host "[1/6] Building (about a minute the first time, a few seconds after that)..."
 if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }

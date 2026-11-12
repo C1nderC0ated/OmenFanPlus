@@ -380,20 +380,22 @@ public class SelfUpdateTests
         }
     }
 
-    private static void WriteEntry(ZipArchive archive, string name, string content)
+    internal static void WriteEntry(ZipArchive archive, string name, string content)
     {
         using var stream = archive.CreateEntry(name).Open();
         stream.Write(Encoding.ASCII.GetBytes(content));
     }
 
-    private static async Task<string[]> RunScriptAsync(string powershell, string staging, string exe, string zip, string? modulePath = null)
+    internal static async Task<string[]> RunScriptAsync(string powershell, string staging, string exe, string zip, string? modulePath = null,
+        RuntimeRequirement? requires = null, string? desktopRuntimeFolder = null)
     {
         var cmd = Path.Combine(Environment.SystemDirectory, "cmd.exe");
         using var gone = Process.Start(new ProcessStartInfo(cmd, "/c exit 0") { CreateNoWindow = true, UseShellExecute = false })!;
         await gone.WaitForExitAsync();
 
         var scriptPath = Path.Combine(staging, "run-update.ps1");
-        await File.WriteAllTextAsync(scriptPath, UpdateRunner.BuildScript(new[] { AppItem(zip) }), new UTF8Encoding(true));
+        var script = UpdateRunner.BuildScript(new[] { AppItem(zip) with { Requires = requires } }, desktopRuntimeFolder);
+        await File.WriteAllTextAsync(scriptPath, script, new UTF8Encoding(true));
 
         var name = "OmenFanPlus-test-" + Guid.NewGuid().ToString("N");
         var start = new ProcessStartInfo(powershell,
@@ -425,6 +427,7 @@ public class SelfUpdateTests
     [InlineData("App 2.1.0 bad-zip", false, "OmenFanPlus 2.1.0: the downloaded package is incomplete (no OmenFanPlus.exe, .dll or .runtimeconfig.json), so the installed files were left alone.")]
     [InlineData("App 2.1.0 backup-failed", false, "OmenFanPlus 2.1.0: the installed files couldn't be backed up first, so they were left alone.")]
     [InlineData("App 2.1.0 wrong-folder", false, "OmenFanPlus 2.1.0: this copy doesn't run as OmenFanPlus.exe in a folder named OmenFanPlus, so its files were left alone. Update it by hand.")]
+    [InlineData("App 3.0.0 runtime-missing", false, "OmenFanPlus 3.0.0 needs a newer .NET Desktop Runtime, which isn't on this PC (see the line before this one if its installer failed), so the installed version was kept.")]
     public void App_result_lines_read_robocopys_exit_codes(string line, bool installedNow, string expected)
     {
         Assert.Equal(expected, UpdateRunner.DescribeResultLine(line, (c, v) => installedNow));

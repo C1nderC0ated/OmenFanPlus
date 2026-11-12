@@ -7,6 +7,8 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <PlatformTarget>x64</PlatformTarget>
     <SelfContained>false</SelfContained>
+    <!-- Like the app: the tests run on the newest .NET installed. DOTNET_ROLL_FORWARD=Minor pins them to .NET 10. -->
+    <RollForward>LatestMajor</RollForward>
     <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>

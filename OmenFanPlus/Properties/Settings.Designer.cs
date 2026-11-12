@@ -297,5 +297,17 @@ namespace OmenFanPlus.Properties {
             }
         }
 
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("0")]
+        public int OfferedRuntimeMajor {
+            get {
+                return ((int)(this["OfferedRuntimeMajor"]));
+            }
+            set {
+                this["OfferedRuntimeMajor"] = value;
+            }
+        }
+
     }
 }

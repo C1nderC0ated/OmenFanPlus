@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Globalization;
-using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.Win32;
 
@@ -16,15 +15,16 @@ namespace OmenFanPlus.Services
 
     /// <summary>
     /// One step for the run script: a verified installer and its switches, or (for <see cref="UpdateComponent.App"/>)
-    /// the verified zip of OmenFanPlus itself.
+    /// the verified zip of OmenFanPlus itself, with the .NET runtime that version needs to start.
     /// </summary>
-    internal sealed record ScriptItem(UpdateComponent Component, Version Version, string File, string Arguments);
+    internal sealed record ScriptItem(UpdateComponent Component, Version Version, string File, string Arguments,
+        RuntimeRequirement? Requires = null);
 
     /// <summary>
     /// Runs verified installers after the app has closed. The app can't run them itself: it holds the PawnIO
     /// device open and runs on the very .NET runtime an update replaces, and so would any second copy of this exe.
-    /// So the app writes a small Windows PowerShell 5.1 script (which runs on the .NET Framework, not on .NET 10)
-    /// next to the verified files, starts it and quits. The script signals the app's quit event, waits for the
+    /// So the app writes a small Windows PowerShell 5.1 script (which runs on the .NET Framework, not on the .NET
+    /// the app uses) next to the verified files, starts it and quits. The script signals the app's quit event, waits for the
     /// app, takes the app's single-instance mutex so no copy can start meanwhile, runs each installer silently,
     /// writes the exit codes to result.txt and starts the app again, which shows the outcome and deletes the
     /// folder. Everything sits in an administrators-only folder under Program Files, and the app path and process
@@ -40,6 +40,7 @@ namespace OmenFanPlus.Services
         private const string BadZip = "bad-zip";
         private const string BackupFailed = "backup-failed";
         private const string WrongFolder = "wrong-folder";
+        private const string RuntimeMissing = "runtime-missing";
         private const string RobocopyLogName = "robocopy.log";
         /// <summary>robocopy's exit codes below this mean the copy worked (bits 0-2 are counts of what changed).</summary>
         private const int RobocopyFirstFailureCode = 8;
@@ -57,13 +58,16 @@ namespace OmenFanPlus.Services
         // ---- the script ----------------------------------------------------------------------------------
 
         /// <summary>
-        /// The script text (CRLF, ASCII: the only paths in it are the staging folder's, under Program Files).
-        /// The app's path, process id and kernel-object names are parameters, passed on the command line.
+        /// The script text (CRLF, ASCII: the only paths in it are the staging folder's and the Desktop Runtime
+        /// folder's, both under Program Files). The app's path, process id and kernel-object names are parameters,
+        /// passed on the command line.
         /// </summary>
-        internal static string BuildScript(IReadOnlyList<ScriptItem> items)
+        /// <param name="desktopRuntimeFolder">Where the Desktop Runtimes are installed (the real folder when null).</param>
+        internal static string BuildScript(IReadOnlyList<ScriptItem> items, string? desktopRuntimeFolder = null)
         {
             if (items.Count == 0)
                 throw new ArgumentException("No installers to run", nameof(items));
+            desktopRuntimeFolder ??= DotNetRuntimes.DesktopRuntimeFolder();
 
             var sb = new StringBuilder();
             void Line(string text) => sb.Append(text).Append("\r\n");
@@ -95,7 +99,7 @@ namespace OmenFanPlus.Services
             foreach (var item in items)
             {
                 if (item.Component == UpdateComponent.App)
-                    AppendSelfUpdate(Line, item);
+                    AppendSelfUpdate(Line, item, desktopRuntimeFolder);
                 else
                     AppendInstaller(Line, item);
             }
@@ -129,13 +133,27 @@ namespace OmenFanPlus.Services
         // mirror the new ones over them (the updates folder, which holds this script, stays), and put the copy back
         // if the mirror fails. /MIR deletes everything the zip doesn't hold, so only a folder named OmenFanPlus
         // holding OmenFanPlus.exe is ever mirrored (install.ps1's rule). robocopy exit codes below 8 mean success;
-        // its log is kept for the app to copy into its own log.
-        private static void AppendSelfUpdate(Action<string> line, ScriptItem item)
+        // its log is kept for the app to copy into its own log. The files are also left alone when the new version
+        // needs a .NET runtime that isn't installed (the installer for it runs earlier in the same script): an app
+        // that can't start can't report anything, or update itself again.
+        private static void AppendSelfUpdate(Action<string> line, ScriptItem item, string desktopRuntimeFolder)
         {
             // No quiet switches: the console output is discarded anyway, and the log should name every file.
             const string robocopyOptions = "/MIR /XD $updatesDir /R:2 /W:2 /NP /LOG+:$robocopyLog";
             line($"    $code = '{BadZip}'");
             line("    $restore = ''");
+            if (item.Requires == null)
+            {
+                line("    $runtimeOk = $true");
+            }
+            else
+            {
+                line("    $runtimeOk = $false");
+                line($"    foreach ($d in @(Get-ChildItem -LiteralPath '{Quote(desktopRuntimeFolder)}' -Directory -ErrorAction SilentlyContinue)) {{");
+                line("        $v = $null");
+                line($"        if ([System.Version]::TryParse($d.Name, [ref]$v) -and ({DotNetRuntimes.PowerShellCondition(item.Requires, "$v")})) {{ $runtimeOk = $true }}");
+                line("    }");
+            }
             line("    $installDir = Split-Path -Path $Exe -Parent");
             line("    $updatesDir = Join-Path -Path $installDir -ChildPath 'updates'");
             line("    $new = Join-Path -Path $PSScriptRoot -ChildPath 'app'");
@@ -150,6 +168,8 @@ namespace OmenFanPlus.Services
             line("    }");
             line("    if ((Split-Path -Path $Exe -Leaf) -ne 'OmenFanPlus.exe' -or (Split-Path -Path $installDir -Leaf) -ne 'OmenFanPlus') {");
             line($"        $code = '{WrongFolder}'");
+            line("    } elseif (-not $runtimeOk) {");
+            line($"        $code = '{RuntimeMissing}'");
             line("    } elseif ($complete) {");
             line($"        & robocopy $installDir $backup {robocopyOptions} | Out-Null");
             line($"        if ($LASTEXITCODE -ge {RobocopyFirstFailureCode}) {{ $code = '{BackupFailed}' }} else {{");
@@ -276,8 +296,8 @@ namespace OmenFanPlus.Services
 
         /// <summary>
         /// One line of result.txt: "app-still-running", "# message from the script", or
-        /// "Component Version exitcode" (the exit code may be "timeout", "not-started", "bad-zip", "backup-failed" or
-        /// "wrong-folder"; a failed self-update adds robocopy's restore code as a fourth word).
+        /// "Component Version exitcode" (the exit code may be "timeout", "not-started", "bad-zip", "backup-failed",
+        /// "wrong-folder" or "runtime-missing"; a failed self-update adds robocopy's restore code as a fourth word).
         /// <paramref name="isInstalled"/> tells whether the version is on the machine now, which is what counts when
         /// the installer said 0.
         /// </summary>
@@ -307,6 +327,8 @@ namespace OmenFanPlus.Services
                 return $"{name}: the installed files couldn't be backed up first, so they were left alone.";
             if (parts[2] == WrongFolder)
                 return $"{name}: this copy doesn't run as OmenFanPlus.exe in a folder named OmenFanPlus, so its files were left alone. Update it by hand.";
+            if (parts[2] == RuntimeMissing)
+                return $"{name} needs a newer .NET Desktop Runtime, which isn't on this PC (see the line before this one if its installer failed), so the installed version was kept.";
             if (!int.TryParse(parts[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out var exitCode))
                 return $"The update script left an unreadable result: {line}";
 
@@ -397,10 +419,7 @@ namespace OmenFanPlus.Services
             switch (component)
             {
                 case UpdateComponent.DotNetRuntime:
-                    var desktop = Path.Combine(DotnetRoot(), "shared", "Microsoft.WindowsDesktop.App");
-                    return Directory.Exists(desktop) && Directory.EnumerateDirectories(desktop)
-                        .Select(d => Version.TryParse(Path.GetFileName(d), out var v) ? v : null)
-                        .Any(v => v != null && v >= version);
+                    return IsRuntimeInstalled(DotNetRuntimes.InstalledDesktopRuntimes(), version);
                 case UpdateComponent.PawnIo:
                     var installed = ReadInstalledPawnIoVersion();
                     return installed != null && installed >= version;
@@ -412,16 +431,12 @@ namespace OmenFanPlus.Services
             }
         }
 
-        /// <summary>The dotnet folder this process runs from (…\shared\Microsoft.NETCore.App\10.0.x\ is three levels down).</summary>
-        internal static string DotnetRoot() => DotnetRootFrom(RuntimeEnvironment.GetRuntimeDirectory());
-
-        internal static string DotnetRootFrom(string runtimeDirectory)
-        {
-            var dir = runtimeDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            for (var i = 0; i < 3; i++)
-                dir = Path.GetDirectoryName(dir) ?? dir;
-            return dir;
-        }
+        /// <summary>
+        /// Whether that runtime version, or a later one of the same .NET version, is among the installed ones:
+        /// .NET 11 being there says nothing about whether a .NET 10 update went in.
+        /// </summary>
+        internal static bool IsRuntimeInstalled(IEnumerable<Version> installed, Version version) =>
+            installed.Any(v => v.Major == version.Major && v >= version);
 
         // Read fresh each time: LibreHardwareMonitor only checks once, when the app starts.
         internal static Version? ReadInstalledPawnIoVersion()

@@ -23,7 +23,7 @@ namespace OmenFanPlus.Services
             // The build time tells builds of the same version apart.
             var built = "unknown build time";
             try { built = $"built {File.GetLastWriteTime(Application.ExecutablePath):yyyy-MM-dd HH:mm}"; } catch { }
-            Info($"Started {Application.ProductName} {Application.ProductVersion} ({built}) from {Application.ExecutablePath}");
+            Info($"Started {Application.ProductName} {Application.ProductVersion} ({built}) on .NET {Environment.Version} from {Application.ExecutablePath}");
         }
 
         public static void Info(string message) => Write("INFO", message);

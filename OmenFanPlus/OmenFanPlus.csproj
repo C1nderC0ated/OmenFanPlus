@@ -12,8 +12,11 @@
 		<!-- Needed by LibreHardwareMonitorLib, which only ships runtime-specific assemblies. -->
 		<RuntimeIdentifier>win-x64</RuntimeIdentifier>
 		<SelfContained>false</SelfContained>
+		<!-- Built for .NET 10, started on the newest .NET installed: it uses .NET 11 where that is there and
+		     keeps working where only .NET 10 is. Tested on both (see DotNetRuntimes.cs and the release workflow). -->
+		<RollForward>LatestMajor</RollForward>
 		<!-- The one place the version lives: a release tag must be "v" + this (the release workflow checks). -->
-		<Version>2.2.0</Version>
+		<Version>2.3.0</Version>
 		<Product>OmenFanPlus</Product>
 		<!-- Keep the version shown in the app as "2.0.0" rather than "2.0.0+<commit>". -->
 		<IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
